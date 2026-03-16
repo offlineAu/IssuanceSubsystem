@@ -1,0 +1,441 @@
+<script>
+var View = {
+  soIndicatorHtml: function() {
+    return "<i class='bi bi-file-earmark-check-fill text-primary ms-1' title='Student already has SO number'></i>";
+  },
+
+  firstAnchorIndicatorHtml: function() {
+    return "<i class='bi bi-pin-angle-fill text-primary ms-1 opacity-75' title='Batch anchor student'></i>";
+  },
+
+  statusBadgeHtml: function(statusValue) {
+    var category = Model.getVerificationCategory(statusValue);
+    if (category === "verified") {
+      return "<span class='status-chip verified' title='Verified'><i class='bi bi-check-circle-fill'></i>Verified</span>";
+    }
+    if (category === "deficiency") {
+      return "<span class='status-chip deficiency' title='Deficiency'><i class='bi bi-exclamation-triangle-fill'></i>Deficiency</span>";
+    }
+    return "<span class='status-chip unverified' title='Unverified'><i class='bi bi-dash-circle-fill'></i>Unverified</span>";
+  },
+
+  getEl: function(id) {
+    return document.getElementById(id);
+  },
+
+  setValue: function(id, value) {
+    var el = this.getEl(id);
+    if (!el) return;
+    el.value = value || "";
+  },
+
+  populateSeriesDropdown: function(selectedValue) {
+    var select = this.getEl("edit_series");
+    if (!select) return;
+
+    var startYear = 1940;
+    var currentYear = new Date().getFullYear();
+    var target = selectedValue ? String(selectedValue) : String(currentYear);
+    var html = "";
+    var hasTarget = false;
+
+    for (var year = currentYear; year >= startYear; year--) {
+      var y = String(year);
+      if (y === target) hasTarget = true;
+      html += "<option value='" + y + "'>" + y + "</option>";
+    }
+
+    if (target && !hasTarget) {
+      html = "<option value='" + target + "'>" + target + "</option>" + html;
+    }
+
+    select.innerHTML = html;
+    select.value = target;
+  },
+
+  renderPage: function(page) {
+    if (Model.isSearchingMain) {
+      this.showMainSearchLoading();
+      return;
+    }
+    var start = (page - 1) * Model.rowsPerPage;
+    var end = start + Model.rowsPerPage;
+    var rows = Model.filteredData.slice(start, end);
+    var tbody = this.getEl("searchResults");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+
+    if (!rows.length) {
+      this.renderEmpty("No records found");
+      return;
+    }
+
+    var cell = function(value) {
+      return "<div class='cell-wrap'>" + (value || "") + "</div>";
+    };
+
+    rows.forEach(function(r) {
+      var hasSO = !!String(r["SO No."] || "").trim();
+      var tr = document.createElement("tr");
+      tr.dataset.row = r._row;
+      tr.innerHTML = "<td>" + cell(r.ID || "") + "</td>" +
+                     "<td>" + cell((r["Name of the Student"] || "") + (hasSO ? View.soIndicatorHtml() : "")) + "</td>" +
+                     "<td>" + cell(r.HEI || "") + "</td>" +
+                     "<td>" + cell(r["Verification: Date Received"] || "") + "</td>" +
+                     "<td>" + cell(r["Verification: Date Accomplished"] || "") + "</td>" +
+                     "<td>" + cell(View.statusBadgeHtml(r["Verification Status"])) + "</td>" +
+                     "<td>" + cell(r["Verification: Date Forwarded"] || "") + "</td>" +
+                     "<td>" + cell(r["Issuance and Encoding of No.: Assigned Person"] || "") + "</td>";
+      tr.classList.add("show");
+      tbody.appendChild(tr);
+    });
+
+    this.renderPagination();
+    this.updateStatusText();
+  },
+
+  renderEmpty: function(message) {
+    var tbody = this.getEl("searchResults");
+    if (!tbody) return;
+    tbody.innerHTML = "<tr><td colspan='8' class='text-center py-4'>" + message + "</td></tr>";
+  },
+
+  renderPagination: function() {
+    var container = this.getEl("pagination");
+    if (!container) return;
+    container.innerHTML = "";
+
+    var totalPages = Math.ceil(Model.filteredData.length / Model.rowsPerPage);
+    var current = Model.currentPage;
+    var safeTotal = Math.max(1, totalPages);
+    if (current > safeTotal) current = safeTotal;
+    if (current < 1) current = 1;
+
+    var pageInput = this.getEl("pageJumpInput");
+    if (pageInput) {
+      pageInput.max = String(safeTotal);
+      pageInput.value = String(current);
+    }
+    var pageMeta = this.getEl("pageMeta");
+    if (pageMeta) {
+      pageMeta.textContent = "Page " + current + " of " + safeTotal;
+    }
+
+    if (totalPages <= 1) return;
+
+    var maxVisible = 5;
+    var start = Math.max(1, current - Math.floor(maxVisible / 2));
+    var end = Math.min(totalPages, start + maxVisible - 1);
+    if (end - start < maxVisible - 1) start = Math.max(1, end - maxVisible + 1);
+
+    if (current > 1) container.innerHTML += "<button onclick='Controller.renderPage(" + (current - 1) + ")'>&laquo; Prev</button>";
+    if (start > 1) container.innerHTML += "<button onclick='Controller.renderPage(1)'>1</button>" + (start > 2 ? "<span>...</span>" : "");
+
+    for (var i = start; i <= end; i++) {
+      container.innerHTML += "<button onclick='Controller.renderPage(" + i + ")' class='" + (i === current ? "active-page" : "") + "'>" + i + "</button>";
+    }
+
+    if (end < totalPages) container.innerHTML += (end < totalPages - 1 ? "<span>...</span>" : "") + "<button onclick='Controller.renderPage(" + totalPages + ")'>" + totalPages + "</button>";
+    if (current < totalPages) container.innerHTML += "<button onclick='Controller.renderPage(" + (current + 1) + ")'>Next &raquo;</button>";
+
+  },
+
+  updateStatusText: function() {
+    var status = this.getEl("statusText");
+    if (!status) return;
+    var visibleCount = Model.filteredData.length;
+    if (!visibleCount) {
+      status.innerText = Model.searchMode
+        ? "Showing 0 of 0 matching rows"
+        : "Showing 0 of 0 loaded rows";
+      return;
+    }
+    var start = (Model.currentPage - 1) * Model.rowsPerPage + 1;
+    var end = Math.min(start + Model.rowsPerPage - 1, visibleCount);
+    status.innerText = Model.searchMode
+      ? "Showing " + start + "-" + end + " of " + visibleCount + " matching rows"
+      : "Showing " + start + "-" + end + " of " + Model.fullData.length + " loaded rows";
+  },
+
+  showOverlay: function(show) {
+    var el = this.getEl("loadingOverlay");
+    if (el) el.classList.toggle("show", show);
+  },
+
+  showMainSearchLoading: function() {
+    var tbody = this.getEl("searchResults");
+    if (!tbody) return;
+    tbody.innerHTML = "<tr><td colspan='8' class='text-center py-4'>" +
+      "<span class='inline-table-loader'><span class='spinner-border spinner-border-sm' role='status'></span><span>Searching...</span></span>" +
+      "</td></tr>";
+  },
+
+  showSaveIndicator: function(message, type, autoHideMs) {
+    var el = this.getEl("saveIndicator");
+    if (!el) return;
+    el.classList.remove("success", "error", "show");
+    if (type === "success") el.classList.add("success");
+    if (type === "error") el.classList.add("error");
+    el.textContent = message || "";
+    el.classList.add("show");
+
+    if (autoHideMs && autoHideMs > 0) {
+      setTimeout(function() { el.classList.remove("show"); }, autoHideMs);
+    }
+  },
+
+  renderSoPrefixOptions: function(prefixes) {
+    var list = this.getEl("so_prefix_list");
+    if (!list) return;
+    list.innerHTML = "";
+    (prefixes || []).forEach(function(prefix) {
+      var option = document.createElement("option");
+      option.value = prefix;
+      list.appendChild(option);
+    });
+  },
+
+  renderBatchSearchResults: function(rows, showEmptyMessage) {
+    var container = this.getEl("batchSearchResults");
+    if (!container) return;
+    container.innerHTML = "";
+
+    if (!rows || !rows.length) {
+      if (showEmptyMessage) container.innerHTML = "<tr><td colspan='2' class='text-center text-muted small'>No students found</td></tr>";
+      return;
+    }
+
+    rows.forEach(function(student) {
+      var restriction = Controller.getBatchAddRestrictionReason(student);
+      var restricted = !!restriction;
+      var row = document.createElement("tr");
+      row.className = "batch-result show" + (restricted ? " locked" : "");
+      if (restricted) row.title = restriction;
+
+      var tdName = document.createElement("td");
+      tdName.innerHTML = "<strong>" + (student["Name of the Student"] || "") + "</strong>" +
+        (restricted ? "<div class='batch-lock-detail' title='" + restriction + "'><i class='bi bi-lock-fill'></i>" + restriction + "</div>" : "");
+
+      var tdAction = document.createElement("td");
+      var addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "icon-action-btn" + (restricted ? " locked" : "");
+      addBtn.title = restricted ? restriction : "Add to batch";
+      addBtn.innerHTML = restricted ? "<i class='bi bi-lock'></i>" : "<i class='bi bi-plus-lg'></i>";
+      addBtn.disabled = restricted;
+      addBtn.onclick = function(e) {
+        e.stopPropagation();
+        Controller.addBatchStudent(student._row);
+      };
+      tdAction.appendChild(addBtn);
+
+      row.appendChild(tdName);
+      row.appendChild(tdAction);
+      row.onclick = function() {
+        if (!restricted) Controller.addBatchStudent(student._row);
+      };
+      container.appendChild(row);
+    });
+  },
+
+  showBatchSearchLoading: function() {
+    var container = this.getEl("batchSearchResults");
+    if (!container) return;
+    container.innerHTML = "<tr><td colspan='2' class='text-center py-3'>" +
+      "<span class='inline-table-loader'><span class='spinner-border spinner-border-sm' role='status'></span><span>Loading...</span></span>" +
+      "</td></tr>";
+  },
+
+  openHistoryModal: function() {
+    var modal = this.getEl("historyModal");
+    if (modal) modal.classList.add("show");
+  },
+
+  closeHistoryModal: function() {
+    var modal = this.getEl("historyModal");
+    if (modal) modal.classList.remove("show");
+  },
+
+  renderHistoryMeta: function(student) {
+    var el = this.getEl("historyMeta");
+    if (!el) return;
+    if (!student) {
+      el.textContent = "Showing all updated students";
+      return;
+    }
+    if (student.summary) {
+      el.textContent = student.summary;
+      return;
+    }
+    el.textContent = "Student: " + (student["Name of the Student"] || "") + " | ID: " + (student.ID || "");
+  },
+
+  showHistoryLoading: function() {
+    var tbody = this.getEl("historyResults");
+    if (!tbody) return;
+    tbody.innerHTML = "<tr><td colspan='10' class='text-center py-4'>" +
+      "<span class='inline-table-loader'><span class='spinner-border spinner-border-sm' role='status'></span><span>Loading history...</span></span>" +
+      "</td></tr>";
+  },
+
+  renderHistoryRows: function(rows) {
+    var tbody = this.getEl("historyResults");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    if (!rows || !rows.length) {
+      tbody.innerHTML = "<tr><td colspan='10' class='text-center text-muted py-3'>No history found</td></tr>";
+      return;
+    }
+    rows.forEach(function(r) {
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + (r.name || "-") + "</td>" +
+        "<td>" + (r.dateReceived || "-") + "</td>" +
+        "<td>" + (r.dateAccomplished || "-") + "</td>" +
+        "<td>" + (r.status || "-") + "</td>" +
+        "<td>" + (r.remarks || "-") + "</td>" +
+        "<td>" + (r.dateForwarded || "-") + "</td>" +
+        "<td>" + (r.soNo || "-") + "</td>" +
+        "<td>" + (r.series || "-") + "</td>" +
+        "<td>" + (r.dateSOIssuance || "-") + "</td>" +
+        "<td>" + (r.dateSaved || "-") + "</td>";
+      tbody.appendChild(tr);
+    });
+  },
+
+  renderSelectedBatchList: function() {
+    var container = this.getEl("selectedBatchList");
+    if (!container) return;
+    container.innerHTML = "";
+    if (Model.batchStudents.length > 0) {
+      container.style.maxHeight = "430px";
+      container.style.overflowY = "auto";
+    } else {
+      container.style.maxHeight = "";
+      container.style.overflowY = "";
+    }
+
+    if (!Model.batchStudents.length) {
+      container.innerHTML = "<div class='text-muted small'>No selected students</div>";
+      return;
+    }
+
+    Model.batchStudents.forEach(function(entry) {
+      var active = String(entry._row) === String(Model.editingRowID) ? " active" : "";
+      var isFirst = !!entry.isFirstWithoutSO;
+      var soLabel = entry.hasExistingSO ? "Existing SO" : "Preview SO";
+      var soValue = entry.previewSO || "-";
+      var indicator = entry.hasExistingSO ? View.soIndicatorHtml() : "";
+      var firstBadge = isFirst ? View.firstAnchorIndicatorHtml() : "";
+
+      var item = document.createElement("div");
+      item.className = "selected-student-item p-2 border rounded mb-2" + active;
+      item.innerHTML = "<div class='d-flex justify-content-between align-items-start gap-2'>" +
+                         "<div>" +
+                           "<div><strong>" + (entry.name || "") + "</strong>" + firstBadge + indicator + "</div>" +
+                           "<div class='small text-muted'>ID: " + (entry.ID || "") + "</div>" +
+                           "<div>" + View.statusBadgeHtml(((Model.fullData.find(function(r){ return String(r._row) === String(entry._row); }) || {})["Verification Status"])) + "</div>" +
+                           "<div class='small'><b>" + soLabel + ":</b> " + soValue + "</div>" +
+                           "<div class='small text-muted'>Date Received: " + (entry.fields.dateReceived || "-") + "</div>" +
+                           "<div class='small text-muted'>Date Accomplished: " + (entry.fields.dateAccomplished || "-") + "</div>" +
+                           "<div class='small text-muted'>Status: " + (entry.fields.status || "-") + "</div>" +
+                           "<div class='small text-muted'>Remarks: " + (entry.fields.remarks || "-") + "</div>" +
+                           "<div class='small text-muted'>Date Forwarded: " + (entry.fields.dateForwarded || "-") + "</div>" +
+                           "<div class='small text-muted'>Series: " + (entry.fields.series || "-") + "</div>" +
+                           "<div class='small text-muted'>Date of SO Issuance: " + (entry.fields.dateSOIssuance || "-") + "</div>" +
+                         "</div>" +
+                         "<div>" +
+                           "<button type='button' class='btn btn-sm btn-outline-danger' title='Remove from batch'><i class='bi bi-trash'></i></button>" +
+                         "</div>" +
+                       "</div>";
+
+      var buttons = item.querySelectorAll("button");
+      if (buttons[0]) {
+        buttons[0].onclick = function(e) {
+          e.stopPropagation();
+          Controller.removeBatchStudent(entry._row);
+        };
+      }
+      item.onclick = function() { Controller.selectBatchStudent(entry._row); };
+      container.appendChild(item);
+    });
+  },
+
+  updateActionButtons: function() {
+    var saveBtn = this.getEl("savebtn");
+    var updateBtn = this.getEl("updateStudentBtn");
+    if (saveBtn) {
+      saveBtn.disabled = !(Model.batchHasChanges && Model.batchConfirmed);
+    }
+    if (updateBtn) {
+      updateBtn.disabled = !Model.batchStudents.length;
+    }
+  },
+
+  populateEditForm: function(entry) {
+    if (!entry) return;
+    Model.setEditingRow(entry._row);
+    this.populateSeriesDropdown(entry.fields.series);
+
+    var firstNoSO = Model.getFirstWithoutSOEntry();
+    var isFirstNoSO = !!(firstNoSO && String(firstNoSO._row) === String(entry._row));
+    var summary = this.getEl("studentSummary");
+    if (summary) {
+      var badge = isFirstNoSO ? this.firstAnchorIndicatorHtml() : "";
+      summary.innerHTML = "<b>" + (entry.name || "") + "</b>" + badge + (entry.hasExistingSO ? this.soIndicatorHtml() : "") + "<br>" +
+                          "ID: " + (entry.ID || "") + "<br>" +
+                          "HEI: " + (entry.HEI || "");
+    }
+
+    this.setValue("issuance_date_received", entry.fields.dateReceived);
+    this.setValue("issuance_date_accomplished", entry.fields.dateAccomplished);
+    this.setValue("issuance_status", entry.fields.status);
+    this.setValue("issuance_remarks", entry.fields.remarks);
+    this.setValue("issuance_date_forwarded", entry.fields.dateForwarded);
+    this.setValue("so_prefix", entry.fields.soPrefix);
+    this.setValue("so_number", entry.fields.soNumber);
+    this.setValue("edit_date_so_issuance", entry.fields.dateSOIssuance);
+    this.setValue("edit_series", entry.fields.series);
+
+    ["issuance_date_received", "issuance_date_accomplished", "edit_date_so_issuance"].forEach(function(id) {
+      var el = View.getEl(id);
+      if (el) el.readOnly = false;
+    });
+
+    var lockSo = entry.hasExistingSO;
+    var soPrefix = this.getEl("so_prefix");
+    var soNumber = this.getEl("so_number");
+    if (soPrefix) soPrefix.readOnly = lockSo;
+    if (soNumber) soNumber.readOnly = lockSo;
+  },
+
+  openEditModal: function(student) {
+    if (!student) return;
+    Model.setLastFocusedStudent(student._row);
+    var entry = Model.normalizeStudentToBatchEntry(student);
+    Model.setBatchStudents([entry]);
+    Model.recomputeBatchSoPreviews();
+    this.populateEditForm(entry);
+    this.renderSelectedBatchList();
+    this.renderBatchSearchResults([], false);
+    this.updateActionButtons();
+    var modal = this.getEl("editModal");
+    if (modal) modal.classList.add("show");
+    var panel = this.getEl("batchPanel");
+    if (panel) panel.classList.add("show-panel");
+  },
+
+  closeEditModal: function() {
+    var modal = this.getEl("editModal");
+    if (modal) modal.classList.remove("show");
+    Model.clearEditing();
+    var batchSearchInput = this.getEl("batchSearchInput");
+    if (batchSearchInput) batchSearchInput.value = "";
+    var panel = this.getEl("batchPanel");
+    if (panel) panel.classList.remove("show-panel");
+    this.renderBatchSearchResults([], false);
+    this.renderSelectedBatchList();
+    this.updateActionButtons();
+  }
+};
+</script>

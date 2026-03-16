@@ -1,0 +1,811 @@
+<script>
+var Controller = {
+  formFieldMap: {
+    issuance_date_received: "dateReceived",
+    issuance_date_accomplished: "dateAccomplished",
+    issuance_status: "status",
+    issuance_remarks: "remarks",
+    issuance_date_forwarded: "dateForwarded",
+    so_prefix: "soPrefix",
+    so_number: "soNumber",
+    edit_series: "series",
+    edit_date_so_issuance: "dateSOIssuance"
+  },
+
+  propagatedFields: [
+    "dateReceived",
+    "dateAccomplished",
+    "status",
+    "remarks",
+    "dateForwarded",
+    "soPrefix",
+    "series",
+    "dateSOIssuance"
+  ],
+
+  searchDebounced: null,
+  batchSearchDebounced: null,
+
+  init: function() {
+    this.initEventListeners();
+    this.loadSoPrefixes();
+    View.populateSeriesDropdown(String(new Date().getFullYear()));
+    this.initData();
+  },
+
+  initData: function() {
+    View.showOverlay(true);
+    Service.getInitialData(Model.initialBatchSize, function(res){
+      Model.fullData = res.data;
+      Model.totalRows = res.total;
+      Model.filteredData = Model.fullData.filter(function(r) {
+        return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
+      });
+      Controller.renderPage(1);
+      View.showOverlay(false);
+
+      Model.loadingBatches = true;
+      Model.nextBatchStart = 2 + Model.fullData.length;
+      Controller.loadNextBatch(Model.nextBatchStart);
+    });
+  },
+
+  loadNextBatch: function(startRow) {
+    if (!Model.loadingBatches || startRow > (Model.totalRows + 1)) return;
+    Service.loadRemainingData(startRow, Model.nextBatchSize, function(res){
+      if (res.data && res.data.length) {
+        var existingRows = {};
+        Model.fullData.forEach(function(f){ existingRows[String(f._row)] = true; });
+        var newRows = res.data.filter(function(r){ return !existingRows[String(r._row)]; });
+        Model.fullData = Model.fullData.concat(newRows);
+
+        if (!Model.searchMode) {
+          Model.filteredData = Model.fullData.filter(function(r) {
+            return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
+          });
+          Controller.renderPage(Model.currentPage);
+        }
+
+        Model.recomputeBatchSoPreviews();
+        View.renderSelectedBatchList();
+
+        Model.nextBatchStart += Model.nextBatchSize;
+        Controller.loadNextBatch(Model.nextBatchStart);
+      } else {
+        Model.loadingBatches = false;
+      }
+    });
+  },
+
+  renderPage: function(page) {
+    var totalPages = Math.max(1, Math.ceil(Model.filteredData.length / Model.rowsPerPage));
+    var safePage = Number(page) || 1;
+    if (safePage < 1) safePage = 1;
+    if (safePage > totalPages) safePage = totalPages;
+    Model.currentPage = safePage;
+    View.renderPage(safePage);
+  },
+
+  goToPage: function(page) {
+    this.renderPage(page);
+  },
+
+  debounce: function(fn, wait) {
+    var timer = null;
+    return function() {
+      var ctx = this;
+      var args = arguments;
+      clearTimeout(timer);
+      timer = setTimeout(function() { fn.apply(ctx, args); }, wait);
+    };
+  },
+
+  doSearch: function(term) {
+    var token = ++Model.activeSearchToken;
+    term = (term || "").trim().toLowerCase();
+    Model.lastMainSearchTerm = term;
+    Model.isSearchingMain = false;
+
+    if (!term) {
+      Model.searchMode = false;
+      Model.filteredData = Model.fullData.filter(function(r) {
+        return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
+      });
+      this.renderPage(1);
+      return;
+    }
+
+    Model.searchMode = true;
+    var localMatch = Model.fullData.filter(function(r){
+      return r["Name of the Student"] && r["Name of the Student"].toLowerCase().includes(term);
+    });
+    var filteredLocal = localMatch.filter(function(r) {
+      return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
+    });
+
+    if (filteredLocal.length) {
+      Model.filteredData = Model.removeDuplicates(filteredLocal);
+      this.renderPage(1);
+    } else {
+      var shouldFetchServer = Model.fullData.length < Model.totalRows || Model.loadingBatches;
+      if (!shouldFetchServer) {
+        View.renderEmpty("No records found");
+        return;
+      }
+
+      Model.isSearchingMain = true;
+      View.showMainSearchLoading();
+      Service.searchExactName(term, function(res){
+        if (token !== Model.activeSearchToken) return;
+        Model.isSearchingMain = false;
+        if (res && res.length) {
+          var filteredRemote = res.filter(function(r) {
+            return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
+          });
+          if (!filteredRemote.length) {
+            View.renderEmpty("No records found");
+            return;
+          }
+          Model.filteredData = Model.removeDuplicates(filteredRemote);
+          Controller.renderPage(1);
+        } else {
+          View.renderEmpty("No records found");
+        }
+      });
+    }
+  },
+
+  openHistoryForFocusedStudent: function() {
+    Model.isHistoryLoading = true;
+    View.openHistoryModal();
+    View.renderHistoryMeta(null);
+    View.showHistoryLoading();
+
+    Service.getIssuanceHistory("", "", function(rows) {
+      Model.isHistoryLoading = false;
+      Model.historyRows = Array.isArray(rows) ? rows : [];
+      View.renderHistoryMeta({ summary: "Showing all updated students (" + Model.historyRows.length + " records)" });
+      View.renderHistoryRows(Model.historyRows);
+    }, function() {
+      Model.isHistoryLoading = false;
+      Model.historyRows = [];
+      View.renderHistoryMeta({ summary: "Showing all updated students (0 records)" });
+      View.renderHistoryRows([]);
+    });
+  },
+
+  getFormPatch: function() {
+    var soPrefix = (document.getElementById("so_prefix") || {}).value || "";
+    var soNumber = (document.getElementById("so_number") || {}).value || "";
+    var series = (document.getElementById("edit_series") || {}).value || "";
+    if (!series) series = String(new Date().getFullYear());
+
+    return {
+      dateReceived: (document.getElementById("issuance_date_received") || {}).value || "",
+      dateAccomplished: (document.getElementById("issuance_date_accomplished") || {}).value || "",
+      status: (document.getElementById("issuance_status") || {}).value || "",
+      remarks: (document.getElementById("issuance_remarks") || {}).value || "",
+      dateForwarded: (document.getElementById("issuance_date_forwarded") || {}).value || "",
+      soPrefix: String(soPrefix).trim(),
+      soNumber: String(soNumber).trim(),
+      series: series,
+      dateSOIssuance: (document.getElementById("edit_date_so_issuance") || {}).value || ""
+    };
+  },
+
+  syncIssuanceDatesOnce: function(changedField, patch) {
+    if (Model.dateSyncInProgress) return patch;
+    if (!patch) patch = this.getFormPatch();
+    if (["dateReceived", "dateAccomplished", "dateSOIssuance"].indexOf(changedField) === -1) return patch;
+
+    var value = patch[changedField];
+    if (!value) return patch;
+
+    Model.dateSyncInProgress = true;
+    patch.dateReceived = value;
+    patch.dateAccomplished = value;
+    patch.dateSOIssuance = value;
+
+    var fieldToId = {
+      dateReceived: "issuance_date_received",
+      dateAccomplished: "issuance_date_accomplished",
+      dateSOIssuance: "edit_date_so_issuance"
+    };
+    Object.keys(fieldToId).forEach(function(key) {
+      var el = document.getElementById(fieldToId[key]);
+      if (el) el.value = value;
+    });
+    Model.dateSyncInProgress = false;
+    return patch;
+  },
+
+  propagateFromFirstStudent: function() {
+    if (!Model.batchStudents.length) return;
+    var anchor = Model.getFirstWithoutSOEntry() || Model.batchStudents[0];
+    var anchorIndex = Model.batchStudents.findIndex(function(s) {
+      return String(s._row) === String(anchor._row);
+    });
+    if (anchorIndex < 0) anchorIndex = 0;
+
+    for (var i = anchorIndex + 1; i < Model.batchStudents.length; i++) {
+      var entry = Model.batchStudents[i];
+      this.propagatedFields.forEach(function(field) {
+        if (entry.hasExistingSO && field === "soPrefix") return;
+        if (!entry.overrides || entry.overrides[field] !== true) {
+          entry.fields[field] = anchor.fields[field] || "";
+        }
+      });
+    }
+  },
+
+  syncCurrentFormToModel: function(changedField) {
+    var entry = Model.getCurrentBatchEntry();
+    if (!entry) return;
+
+    var previous = Object.assign({}, entry.fields);
+    var patch = this.getFormPatch();
+    patch = this.syncIssuanceDatesOnce(changedField, patch);
+
+    if ((changedField === "soPrefix" || changedField === "soNumber") && !entry.hasExistingSO) {
+      var typedSO = Model.formatSoNo(patch.soPrefix, patch.soNumber);
+      if (typedSO && this.isDuplicateSOForRow(typedSO, entry._row)) {
+        alert("Duplicate SO number detected.");
+        patch.soPrefix = previous.soPrefix || "";
+        patch.soNumber = previous.soNumber || "";
+        var soPrefixEl = document.getElementById("so_prefix");
+        var soNumberEl = document.getElementById("so_number");
+        if (soPrefixEl) soPrefixEl.value = patch.soPrefix;
+        if (soNumberEl) soNumberEl.value = patch.soNumber;
+      }
+    }
+
+    var first = Model.getFirstWithoutSOEntry() || (Model.batchStudents.length ? Model.batchStudents[0] : null);
+    var firstIndex = first ? Model.batchStudents.findIndex(function(s) { return String(s._row) === String(first._row); }) : -1;
+    var entryIndex = Model.batchStudents.findIndex(function(s) { return String(s._row) === String(entry._row); });
+    var isFirst = first && String(first._row) === String(entry._row);
+    var followsAnchor = first && entryIndex > firstIndex;
+
+    if (!isFirst && followsAnchor && changedField && entry.overrides) {
+      var keysToMark = [changedField];
+      if (["dateReceived", "dateAccomplished", "dateSOIssuance"].indexOf(changedField) !== -1) {
+        keysToMark = ["dateReceived", "dateAccomplished", "dateSOIssuance"];
+      }
+      keysToMark.forEach(function(key) {
+        if (!Object.prototype.hasOwnProperty.call(entry.overrides, key)) return;
+        var firstValue = first ? (first.fields[key] || "") : "";
+        entry.overrides[key] = (patch[key] || "") !== firstValue;
+      });
+    }
+
+    Model.updateBatchEntryFields(entry._row, patch);
+    this.propagateFromFirstStudent();
+    Model.recomputeBatchSoPreviews();
+    Model.batchHasChanges = Model.isBatchDirty();
+    View.renderSelectedBatchList();
+    View.updateActionButtons();
+  },
+
+  isDuplicateSOForRow: function(so, rowID) {
+    var value = String(so || "").trim();
+    if (!value) return false;
+
+    var inDb = Model.fullData.some(function(row) {
+      var rowSo = String(row["SO No."] || "").trim();
+      return rowSo && rowSo === value && String(row._row) !== String(rowID);
+    });
+    if (inDb) return true;
+
+    var inBatch = Model.batchStudents.some(function(entry) {
+      return String(entry._row) !== String(rowID) && String(entry.previewSO || "").trim() === value;
+    });
+    return inBatch;
+  },
+
+  validateBatchEntries: function() {
+    if (!Model.batchStudents.length) return "No students in batch.";
+    var invalid = Model.batchStudents.find(function(entry) {
+      return !entry.previewSO;
+    });
+    if (invalid) return "Missing SO number for " + (invalid.name || "a student") + ".";
+
+    var batchSoMap = {};
+    for (var i = 0; i < Model.batchStudents.length; i++) {
+      var so = String(Model.batchStudents[i].previewSO || "").trim();
+      if (!so) continue;
+      if (batchSoMap[so]) return "Duplicate SO number detected.";
+      batchSoMap[so] = true;
+    }
+
+    for (var j = 0; j < Model.batchStudents.length; j++) {
+      var b = Model.batchStudents[j];
+      var candidate = String(b.previewSO || "").trim();
+      if (!candidate) continue;
+      var clash = Model.fullData.find(function(row) {
+        var rowSo = String(row["SO No."] || "").trim();
+        return rowSo && rowSo === candidate && String(row._row) !== String(b._row);
+      });
+      if (clash) return "Duplicate SO number detected.";
+    }
+    return "";
+  },
+
+  selectBatchStudent: function(rowID) {
+    this.syncCurrentFormToModel();
+    var entry = Model.getBatchEntryByRow(rowID);
+    if (entry) {
+      View.populateEditForm(entry);
+      View.renderSelectedBatchList();
+    }
+  },
+
+  getBatchAddRestrictionReason: function(student) {
+    if (!student) return "";
+    var hasSO = !!String(student["SO No."] || "").trim();
+    if (hasSO) return "Cannot add student with existing SO number";
+
+    var issuanceStatus = String(student["Issuance and Encoding of No.: Status"] || "").trim().toLowerCase();
+    if (issuanceStatus === "approved") return "Cannot add student with Issuance Status Approved";
+    return "";
+  },
+
+  addBatchStudent: function(rowID) {
+    this.syncCurrentFormToModel();
+    var student = Model.fullData.find(function(s){ return String(s._row) === String(rowID); });
+    if (!student) return;
+    var restrictionReason = this.getBatchAddRestrictionReason(student);
+    if (restrictionReason) {
+      alert(restrictionReason);
+      return;
+    }
+
+    Model.addBatchStudent(student);
+    this.propagateFromFirstStudent();
+    Model.recomputeBatchSoPreviews();
+    Model.batchHasChanges = Model.isBatchDirty();
+    View.renderSelectedBatchList();
+    View.updateActionButtons();
+
+    var anchorEntry = Model.getFirstWithoutSOEntry() || Model.batchStudents[0];
+    if (anchorEntry) View.populateEditForm(anchorEntry);
+    this.searchBatchStudents((document.getElementById("batchSearchInput") || {}).value || "");
+  },
+
+  removeBatchStudent: function(rowID) {
+    this.syncCurrentFormToModel();
+    var wasEditing = String(Model.editingRowID) === String(rowID);
+    Model.removeBatchStudent(rowID);
+
+    if (!Model.batchStudents.length) {
+      View.closeEditModal();
+      return;
+    }
+
+    this.propagateFromFirstStudent();
+    Model.recomputeBatchSoPreviews();
+    Model.batchHasChanges = Model.isBatchDirty();
+    if (wasEditing || !Model.getCurrentBatchEntry()) {
+      View.populateEditForm(Model.batchStudents[0]);
+    }
+    View.renderSelectedBatchList();
+    View.updateActionButtons();
+    this.searchBatchStudents((document.getElementById("batchSearchInput") || {}).value || "");
+  },
+
+  confirmPreviewUpdate: function() {
+    this.syncCurrentFormToModel();
+    if (!Model.batchHasChanges) {
+      View.showSaveIndicator("No changes to update", "error", 2000);
+      View.updateActionButtons();
+      return;
+    }
+    var validationError = this.validateBatchEntries();
+    if (validationError) {
+      alert(validationError);
+      Model.batchConfirmed = false;
+      View.updateActionButtons();
+      return;
+    }
+    Model.batchConfirmed = true;
+    View.updateActionButtons();
+    View.showSaveIndicator("Preview updated", "success", 1800);
+  },
+
+  searchBatchStudents: function(term) {
+    term = (term || "").trim().toLowerCase();
+    var token = ++Model.activeBatchSearchToken;
+    Model.lastBatchSearchTerm = term;
+
+    if (!term) {
+      View.renderBatchSearchResults([], false);
+      return;
+    }
+
+    var localResults = Model.fullData.filter(function(student) {
+      if (Model.isBatchSelected(student._row)) return false;
+      var name = (student["Name of the Student"] || "").toLowerCase();
+      var id = String(student.ID || "").toLowerCase();
+      var match = name.indexOf(term) !== -1 || id.indexOf(term) !== -1;
+      return match && Model.passesVerificationFilter(student["Verification Status"], Model.verificationFilterModal);
+    }).slice(0, 25);
+
+    if (localResults.length) {
+      View.renderBatchSearchResults(localResults, true);
+      return;
+    }
+
+    var shouldFetchServer = Model.fullData.length < Model.totalRows || Model.loadingBatches;
+    if (!shouldFetchServer) {
+      View.renderBatchSearchResults([], true);
+      return;
+    }
+
+    View.showBatchSearchLoading();
+    Service.searchExactName(term, function(res) {
+      if (token !== Model.activeBatchSearchToken) return;
+      if (!res || !res.length) {
+        View.renderBatchSearchResults([], true);
+        return;
+      }
+      var remote = res.filter(function(student) {
+        if (Model.isBatchSelected(student._row)) return false;
+        return Model.passesVerificationFilter(student["Verification Status"], Model.verificationFilterModal);
+      }).slice(0, 25);
+      View.renderBatchSearchResults(remote, true);
+    });
+  },
+
+  setVerificationFilter: function(mode, scope) {
+    var allowed = ["verified", "deficiency", "unverified"];
+    var selected = [];
+    var modeWasArray = Array.isArray(mode);
+    var target = (scope === "modal") ? "verificationFilterModal" : "verificationFilterMain";
+    if (Array.isArray(mode)) {
+      selected = mode.filter(function(v, i, arr) {
+        return allowed.indexOf(v) !== -1 && arr.indexOf(v) === i;
+      });
+    } else {
+      var value = String(mode || "all");
+      if (value === "all") {
+        selected = allowed.slice();
+      } else if (allowed.indexOf(value) !== -1) {
+        selected = [value];
+      }
+    }
+    if (!selected.length && !modeWasArray) selected = allowed.slice();
+    Model[target] = selected;
+    this.refreshFilterUI();
+
+    if (target === "verificationFilterMain") {
+      this.doSearch(Model.lastMainSearchTerm || "");
+      return;
+    }
+    this.searchBatchStudents(Model.lastBatchSearchTerm || "");
+  },
+
+  refreshFilterUI: function() {
+    var labelMap = {
+      verified: "Verified",
+      deficiency: "Deficiency",
+      unverified: "Unverified"
+    };
+
+    var renderTags = function(containerId, mode, scope) {
+      var container = document.getElementById(containerId);
+      if (!container) return;
+      if (!mode.length) {
+        container.innerHTML = "";
+        return;
+      }
+      container.innerHTML = mode.map(function(item) {
+        var chipScopeClass = (scope === "main") ? "filter-chip-main" : "filter-chip-modal";
+        return "<span class='filter-chip " + chipScopeClass + " active' data-filter='" + item + "'>" + (labelMap[item] || item) + " <button type='button' title='Remove filter'>&times;</button></span>";
+      }).join(" ");
+      container.querySelectorAll(".filter-chip button").forEach(function(btn) {
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          var chip = btn.closest(".filter-chip");
+          var key = chip ? chip.getAttribute("data-filter") : "";
+          var next = mode.filter(function(m) { return m !== key; });
+          Controller.setVerificationFilter(next, scope);
+        };
+      });
+    };
+
+    var mainMode = Array.isArray(Model.verificationFilterMain) ? Model.verificationFilterMain.slice() : ["verified", "deficiency", "unverified"];
+    var modalMode = Array.isArray(Model.verificationFilterModal) ? Model.verificationFilterModal.slice() : ["verified", "deficiency", "unverified"];
+    renderTags("filterTagsMain", mainMode, "main");
+    renderTags("filterTagsModal", modalMode, "modal");
+    var mainOptions = document.querySelectorAll("input[name='filterMainOption']");
+    var modalOptions = document.querySelectorAll("input[name='filterModalOption']");
+    mainOptions.forEach(function(r) { r.checked = mainMode.indexOf(r.value) !== -1; });
+    modalOptions.forEach(function(r) { r.checked = modalMode.indexOf(r.value) !== -1; });
+  },
+
+  loadSoPrefixes: function() {
+    Service.getSavedSoPrefixes(function(prefixes) {
+      Model.soPrefixes = Array.isArray(prefixes) ? prefixes : [];
+      View.renderSoPrefixOptions(Model.soPrefixes);
+    });
+  },
+
+  saveSoPrefixIfNeeded: function(prefix) {
+    var value = String(prefix || "").trim();
+    if (!value) return;
+    Service.saveSoPrefix(value, function(prefixes) {
+      Model.soPrefixes = Array.isArray(prefixes) ? prefixes : Model.soPrefixes;
+      View.renderSoPrefixOptions(Model.soPrefixes);
+    });
+  },
+
+  saveEdit: function() {
+    if (!Model.batchConfirmed) {
+      alert("Please click Update to confirm changes before saving.");
+      View.updateActionButtons();
+      return;
+    }
+    if (!Model.batchHasChanges) {
+      View.showSaveIndicator("No changes to save", "error", 2000);
+      View.updateActionButtons();
+      return;
+    }
+    var validationError = this.validateBatchEntries();
+    if (validationError) {
+      alert(validationError);
+      Model.batchConfirmed = false;
+      View.updateActionButtons();
+      return;
+    }
+
+    var targets = Model.batchStudents.slice();
+    var byRow = {};
+    targets.forEach(function(t) { byRow[String(t._row)] = t; });
+    var idx = 0;
+    var failed = 0;
+
+    View.showSaveIndicator("Saving...", "info", 0);
+
+    var updateNext = function() {
+      if (idx >= targets.length) {
+        var applySaved = function(row) {
+          var entry = byRow[String(row._row)];
+          if (!entry) return row;
+          row["Issuance and Encoding of No.: Date Received"] = entry.fields.dateReceived || "";
+          row["Issuance and Encoding of No.: Date Accomplished"] = entry.fields.dateAccomplished || "";
+          row["Issuance and Encoding of No.: Status"] = entry.fields.status || "";
+          row["Issuance and Encoding of No.: Remarks"] = entry.fields.remarks || "";
+          row["Issuance and Encoding of No.: Date Forwarded"] = entry.fields.dateForwarded || "";
+          row["SO No."] = entry.previewSO || "";
+          row["Series"] = entry.fields.series || "";
+          row["Date of SO Issuance"] = entry.fields.dateSOIssuance || "";
+          return row;
+        };
+
+        Model.fullData = Model.fullData.map(applySaved);
+        Model.filteredData = Model.filteredData.map(applySaved);
+        Model.batchConfirmed = false;
+        Model.batchHasChanges = false;
+        Controller.renderPage(Model.currentPage);
+        View.updateActionButtons();
+        if (failed) {
+          View.showSaveIndicator("Saved with " + failed + " failure(s)", "error", 3500);
+        } else {
+          View.showSaveIndicator("Saved successfully", "success", 3000);
+        }
+        return;
+      }
+
+      var entry = targets[idx++];
+      var payload = {
+        row: entry._row,
+        dateReceived: entry.fields.dateReceived || "",
+        dateAccomplished: entry.fields.dateAccomplished || "",
+        status: entry.fields.status || "",
+        remarks: entry.fields.remarks || "",
+        dateForwarded: entry.fields.dateForwarded || "",
+        soNo: entry.previewSO || "",
+        series: entry.fields.series || "",
+        dateSOIssuance: entry.fields.dateSOIssuance || ""
+      };
+
+      Service.updateIssuanceColumns(
+        payload,
+        function() { updateNext(); },
+        function() {
+          failed += 1;
+          updateNext();
+        }
+      );
+    };
+
+    updateNext();
+  },
+
+  onFormFieldEvent: function(fieldKey) {
+    this.syncCurrentFormToModel(fieldKey);
+  },
+
+  initEventListeners: function() {
+    if (Model.listenersBound) return;
+    Model.listenersBound = true;
+
+    this.searchDebounced = this.debounce(function(value) { Controller.doSearch(value); }, 220);
+    this.batchSearchDebounced = this.debounce(function(value) { Controller.searchBatchStudents(value); }, 180);
+
+    var searchInput = document.getElementById("searchInput");
+    var searchClearBtn = document.getElementById("searchClearBtn");
+    var updateClearButtonState = function(inputEl, buttonEl) {
+      if (!inputEl || !buttonEl) return;
+      var hasText = !!String(inputEl.value || "").trim();
+      buttonEl.disabled = !hasText;
+      buttonEl.style.visibility = hasText ? "visible" : "hidden";
+    };
+    if (searchInput) {
+      searchInput.addEventListener("input", function(e){
+        updateClearButtonState(searchInput, searchClearBtn);
+        Controller.searchDebounced(e.target.value);
+      });
+    }
+    if (searchClearBtn && searchInput) {
+      searchClearBtn.addEventListener("click", function() {
+        searchInput.value = "";
+        updateClearButtonState(searchInput, searchClearBtn);
+        Controller.doSearch("");
+      });
+      updateClearButtonState(searchInput, searchClearBtn);
+    }
+
+    var statusFilterMain = document.getElementById("statusFilterMain");
+    var statusFilterModal = document.getElementById("statusFilterModal");
+    if (statusFilterMain) statusFilterMain.value = "all";
+    if (statusFilterModal) statusFilterModal.value = "all";
+
+    var addFilterBtnMain = document.getElementById("addFilterBtnMain");
+    var addFilterBtnModal = document.getElementById("addFilterBtnModal");
+    var filterPopoverMain = document.getElementById("filterPopoverMain");
+    var filterPopoverModal = document.getElementById("filterPopoverModal");
+    var filterDoneMain = document.getElementById("filterDoneMain");
+    var filterDoneModal = document.getElementById("filterDoneModal");
+    var filterAllMain = document.getElementById("filterAllMain");
+    var filterAllModal = document.getElementById("filterAllModal");
+    var filterClearMain = document.getElementById("filterClearMain");
+    var filterClearModal = document.getElementById("filterClearModal");
+    var mainRadioOptions = document.querySelectorAll("input[name='filterMainOption']");
+    var modalRadioOptions = document.querySelectorAll("input[name='filterModalOption']");
+
+    if (addFilterBtnMain && filterPopoverMain) {
+      addFilterBtnMain.addEventListener("click", function(e) {
+        e.stopPropagation();
+        filterPopoverMain.classList.toggle("show");
+        if (filterPopoverModal) filterPopoverModal.classList.remove("show");
+      });
+    }
+    if (addFilterBtnModal && filterPopoverModal) {
+      addFilterBtnModal.addEventListener("click", function(e) {
+        e.stopPropagation();
+        filterPopoverModal.classList.toggle("show");
+        if (filterPopoverMain) filterPopoverMain.classList.remove("show");
+      });
+    }
+    if (filterDoneMain && filterPopoverMain) {
+      filterDoneMain.addEventListener("click", function() { filterPopoverMain.classList.remove("show"); });
+    }
+    if (filterDoneModal && filterPopoverModal) {
+      filterDoneModal.addEventListener("click", function() { filterPopoverModal.classList.remove("show"); });
+    }
+    mainRadioOptions.forEach(function(radio) {
+      radio.addEventListener("change", function() {
+        var selected = Array.from(mainRadioOptions).filter(function(el) { return el.checked; }).map(function(el) { return el.value; });
+        Controller.setVerificationFilter(selected, "main");
+      });
+    });
+    modalRadioOptions.forEach(function(radio) {
+      radio.addEventListener("change", function() {
+        var selected = Array.from(modalRadioOptions).filter(function(el) { return el.checked; }).map(function(el) { return el.value; });
+        Controller.setVerificationFilter(selected, "modal");
+      });
+    });
+    if (filterAllMain) filterAllMain.addEventListener("click", function() { Controller.setVerificationFilter(["verified", "deficiency", "unverified"], "main"); });
+    if (filterAllModal) filterAllModal.addEventListener("click", function() { Controller.setVerificationFilter(["verified", "deficiency", "unverified"], "modal"); });
+    if (filterClearMain) filterClearMain.addEventListener("click", function() { Controller.setVerificationFilter([], "main"); });
+    if (filterClearModal) filterClearModal.addEventListener("click", function() { Controller.setVerificationFilter([], "modal"); });
+    document.addEventListener("click", function(e) {
+      if (filterPopoverMain && !e.target.closest("#filterBuilderMain")) filterPopoverMain.classList.remove("show");
+      if (filterPopoverModal && !e.target.closest("#filterBuilderModal")) filterPopoverModal.classList.remove("show");
+    });
+    this.refreshFilterUI();
+
+    var resultsTable = document.getElementById("searchResults");
+    if (resultsTable) {
+      resultsTable.addEventListener("click", function(e) {
+        var tr = e.target.closest("tr");
+        if (tr && tr.dataset.row) {
+          var student = Model.fullData.find(function(s) { return String(s._row) === String(tr.dataset.row); });
+          if (student) View.openEditModal(student);
+        }
+      });
+    }
+
+    var batchSearchInput = document.getElementById("batchSearchInput");
+    var batchSearchClearBtn = document.getElementById("batchSearchClearBtn");
+    if (batchSearchInput) {
+      batchSearchInput.addEventListener("input", function(e) {
+        updateClearButtonState(batchSearchInput, batchSearchClearBtn);
+        Controller.batchSearchDebounced(e.target.value);
+      });
+    }
+    if (batchSearchClearBtn && batchSearchInput) {
+      batchSearchClearBtn.addEventListener("click", function() {
+        batchSearchInput.value = "";
+        updateClearButtonState(batchSearchInput, batchSearchClearBtn);
+        Controller.searchBatchStudents("");
+      });
+      updateClearButtonState(batchSearchInput, batchSearchClearBtn);
+    }
+
+    var pageInput = document.getElementById("pageJumpInput");
+    var pageBtn = document.getElementById("pageJumpBtn");
+    if (pageBtn && pageInput) {
+      pageBtn.addEventListener("click", function() {
+        Controller.goToPage(pageInput.value);
+      });
+      pageInput.addEventListener("keydown", function(e) {
+        if (e.key === "Enter") Controller.goToPage(pageInput.value);
+      });
+    }
+
+    Object.keys(this.formFieldMap).forEach(function(id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var key = Controller.formFieldMap[id];
+      el.addEventListener("input", function() { Controller.onFormFieldEvent(key); });
+      el.addEventListener("change", function() { Controller.onFormFieldEvent(key); });
+    });
+
+    var soPrefixEl = document.getElementById("so_prefix");
+    if (soPrefixEl) {
+      soPrefixEl.addEventListener("blur", function() {
+        Controller.saveSoPrefixIfNeeded(soPrefixEl.value);
+      });
+      soPrefixEl.addEventListener("change", function() {
+        Controller.saveSoPrefixIfNeeded(soPrefixEl.value);
+      });
+    }
+
+    var editModal = document.getElementById("editModal");
+    if (editModal) {
+      editModal.addEventListener("click", function(e) {
+        if (e.target === editModal) View.closeEditModal();
+      });
+    }
+
+    var viewHistoryFab = document.getElementById("viewHistoryFab");
+    if (viewHistoryFab) {
+      viewHistoryFab.addEventListener("click", function() {
+        Controller.openHistoryForFocusedStudent();
+      });
+    }
+    var viewHistoryText = document.getElementById("viewHistoryText");
+    if (viewHistoryText) {
+      viewHistoryText.addEventListener("click", function(e) {
+        e.stopPropagation();
+        Controller.openHistoryForFocusedStudent();
+      });
+      viewHistoryText.style.cursor = "pointer";
+    }
+
+    var closeHistoryBtn = document.getElementById("closeHistoryBtn");
+    if (closeHistoryBtn) {
+      closeHistoryBtn.addEventListener("click", function() { View.closeHistoryModal(); });
+    }
+
+    var historyModal = document.getElementById("historyModal");
+    if (historyModal) {
+      historyModal.addEventListener("click", function(e) {
+        if (e.target === historyModal) View.closeHistoryModal();
+      });
+    }
+
+    View.updateActionButtons();
+  }
+};
+</script>

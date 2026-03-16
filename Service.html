@@ -1,0 +1,36 @@
+<script>
+var Service = {
+  getInitialData: function(batchSize, onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getInitialData(batchSize);
+  },
+
+  loadRemainingData: function(startRow, batchSize, onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).loadRemainingData(startRow, batchSize);
+  },
+
+  searchExactName: function(term, onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).searchExactName(term);
+  },
+
+  getSavedSoPrefixes: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getSavedSoPrefixes();
+  },
+
+  saveSoPrefix: function(prefix, onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).saveSoPrefix(prefix);
+  },
+
+  updateIssuanceColumns: function(payload, onSuccess, onFailure) {
+    google.script.run
+      .withSuccessHandler(onSuccess)
+      .withFailureHandler(onFailure)
+      .updateIssuanceColumns(payload);
+  },
+
+  getIssuanceHistory: function(studentId, studentName, onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.getIssuanceHistory(studentId, studentName);
+  }
+};
+</script>

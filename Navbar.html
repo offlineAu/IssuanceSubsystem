@@ -1,0 +1,49 @@
+<nav class="app-navbar" aria-label="Primary navigation">
+  <div class="app-navbar-shell">
+    <div class="app-navbar-top">
+      <div class="app-navbar-logo-slot">
+        <div class="app-navbar-logo-placeholder is-loading" id="navbarLogoShell">
+          <div class="app-navbar-paper-panel">
+            <div class="app-navbar-logo-loading" id="navbarLogoLoading" aria-live="polite">
+              <span class="app-navbar-logo-loading-dot"></span>
+              <span>Loading logo</span>
+            </div>
+            <div class="app-navbar-paper-inner">
+              <img id="navbarLogoImage" class="app-navbar-logo-image d-none" alt="System logo">
+              <span id="navbarLogoFallback" class="app-navbar-logo-fallback">ITS</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="app-navbar-title-wrap">
+        <h1 class="app-navbar-title">Issuance Tracking System</h1>
+      </div>
+      <div class="app-navbar-title-spacer" aria-hidden="true"></div>
+    </div>
+
+    <div class="app-navbar-navrow">
+      <div class="app-navbar-account" aria-label="Current signed-in user">
+        <span id="accountName" class="app-navbar-account-name">
+          <span class="account-name-loading">
+            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            <span>Loading...</span>
+          </span>
+        </span>
+      </div>
+      <div class="app-navbar-tabs">
+        <button type="button" class="app-navbar-link is-active" id="navHomeBtn" data-view="home" aria-pressed="true">
+          <i class="bi bi-house-door-fill" aria-hidden="true"></i>
+          <span>Home</span>
+        </button>
+        <button type="button" class="app-navbar-link" id="navReportBtn" data-view="report" aria-pressed="false">
+          <i class="bi bi-graph-up-arrow" aria-hidden="true"></i>
+          <span>Report</span>
+        </button>
+        <button type="button" class="app-navbar-link" id="navHistoryBtn">
+          <i class="bi bi-clock-history" aria-hidden="true"></i>
+          <span>History</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</nav>

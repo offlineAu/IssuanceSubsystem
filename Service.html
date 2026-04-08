@@ -31,6 +31,60 @@ var Service = {
     var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
     if (onFailure) runner = runner.withFailureHandler(onFailure);
     runner.getIssuanceHistory(studentId, studentName);
+  },
+
+  getSaveFailureHistory: function(onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.getSaveFailureHistory();
+  },
+
+  retryFailedSave: function(logRow, onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.retryFailedSave(logRow);
+  },
+
+  logClientSaveFailure: function(payload, message, onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.logClientSaveFailure(payload, message);
+  },
+
+  getAccountName: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getAccountName();
+  },
+
+  getUserRole: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getUserRole();
+  },
+
+  getUserAccessContext: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getUserAccessContext();
+  },
+
+  getCurrentUserDebugInfo: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getCurrentUserDebugInfo();
+  },
+
+  getUserPositionFieldSchema: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getUserPositionFieldSchema();
+  },
+
+  getNavbarLogoData: function(onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.getNavbarLogoData();
+  },
+
+  getDatabaseRowUpdateInfo: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getDatabaseRowInfo();
+  },
+
+  getDatabaseRow: function(rowNumber, onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.getDatabaseRow(rowNumber);
   }
 };
 </script>

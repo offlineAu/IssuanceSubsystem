@@ -23,24 +23,54 @@ var Controller = {
     "dateSOIssuance"
   ],
 
+  validationFieldMap: {
+    dateReceived: { id: "issuance_date_received", label: "Date Received" },
+    dateAccomplished: { id: "issuance_date_accomplished", label: "Date Accomplished" },
+    status: { id: "issuance_status", label: "Status" },
+    remarks: { id: "issuance_remarks", label: "Remarks" },
+    dateForwarded: { id: "issuance_date_forwarded", label: "Date Forwarded" },
+    soNo: { id: "so_prefix", partnerId: "so_number", label: "SO No." },
+    series: { id: "edit_series", label: "Series" },
+    dateSOIssuance: { id: "edit_date_so_issuance", label: "Date of SO Issuance" }
+  },
+
   searchDebounced: null,
   batchSearchDebounced: null,
+  pendingSaveTargets: null,
+  pendingStatusEditStudent: null,
+  pendingStatusAction: null,
+
+  setActiveMainView: function(viewName) {
+    var nextView = viewName === "report" ? "report" : (viewName === "history" ? "history" : "home");
+    Model.activeMainView = nextView;
+    View.setActiveMainView(nextView);
+    if (nextView === "report") {
+      View.renderReportAnalytics();
+    }
+  },
 
   init: function() {
     this.initEventListeners();
+    this.loadNavbarLogo();
+    this.loadAccountName();
+    this.loadUserDebugInfo();
+    this.loadUserRole();
+    this.loadUserPositionFieldSchema();
     this.loadSoPrefixes();
     View.populateSeriesDropdown(String(new Date().getFullYear()));
+    this.setActiveMainView("home");
     this.initData();
+    this.startDatabaseRowPolling();
   },
 
   initData: function() {
     View.showOverlay(true);
     Service.getInitialData(Model.initialBatchSize, function(res){
+      Model.recordViewConfig = res.viewConfig || Model.recordViewConfig;
+      View.applyRecordViewConfig();
       Model.fullData = res.data;
       Model.totalRows = res.total;
-      Model.filteredData = Model.fullData.filter(function(r) {
-        return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
-      });
+      Model.filteredData = Model.applyMainViewFilters(Model.fullData);
       Controller.renderPage(1);
       View.showOverlay(false);
 
@@ -60,14 +90,13 @@ var Controller = {
         Model.fullData = Model.fullData.concat(newRows);
 
         if (!Model.searchMode) {
-          Model.filteredData = Model.fullData.filter(function(r) {
-            return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
-          });
+          Model.filteredData = Model.applyMainViewFilters(Model.fullData);
           Controller.renderPage(Model.currentPage);
         }
 
         Model.recomputeBatchSoPreviews();
         View.renderSelectedBatchList();
+        View.renderReportAnalytics();
 
         Model.nextBatchStart += Model.nextBatchSize;
         Controller.loadNextBatch(Model.nextBatchStart);
@@ -108,9 +137,7 @@ var Controller = {
 
     if (!term) {
       Model.searchMode = false;
-      Model.filteredData = Model.fullData.filter(function(r) {
-        return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
-      });
+      Model.filteredData = Model.applyMainViewFilters(Model.fullData);
       this.renderPage(1);
       return;
     }
@@ -119,9 +146,7 @@ var Controller = {
     var localMatch = Model.fullData.filter(function(r){
       return r["Name of the Student"] && r["Name of the Student"].toLowerCase().includes(term);
     });
-    var filteredLocal = localMatch.filter(function(r) {
-      return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
-    });
+    var filteredLocal = Model.applyMainViewFilters(localMatch);
 
     if (filteredLocal.length) {
       Model.filteredData = Model.removeDuplicates(filteredLocal);
@@ -139,9 +164,7 @@ var Controller = {
         if (token !== Model.activeSearchToken) return;
         Model.isSearchingMain = false;
         if (res && res.length) {
-          var filteredRemote = res.filter(function(r) {
-            return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
-          });
+          var filteredRemote = Model.applyMainViewFilters(res);
           if (!filteredRemote.length) {
             View.renderEmpty("No records found");
             return;
@@ -153,25 +176,6 @@ var Controller = {
         }
       });
     }
-  },
-
-  openHistoryForFocusedStudent: function() {
-    Model.isHistoryLoading = true;
-    View.openHistoryModal();
-    View.renderHistoryMeta(null);
-    View.showHistoryLoading();
-
-    Service.getIssuanceHistory("", "", function(rows) {
-      Model.isHistoryLoading = false;
-      Model.historyRows = Array.isArray(rows) ? rows : [];
-      View.renderHistoryMeta({ summary: "Showing all updated students (" + Model.historyRows.length + " records)" });
-      View.renderHistoryRows(Model.historyRows);
-    }, function() {
-      Model.isHistoryLoading = false;
-      Model.historyRows = [];
-      View.renderHistoryMeta({ summary: "Showing all updated students (0 records)" });
-      View.renderHistoryRows([]);
-    });
   },
 
   getFormPatch: function() {
@@ -191,6 +195,24 @@ var Controller = {
       series: series,
       dateSOIssuance: (document.getElementById("edit_date_so_issuance") || {}).value || ""
     };
+  },
+
+  getPermissionKeyForField: function(fieldKey) {
+    if (fieldKey === "soPrefix" || fieldKey === "soNumber") return "soNo";
+    return fieldKey;
+  },
+
+  isFieldEditableForCurrentRecord: function(fieldKey) {
+    var permissionKey = this.getPermissionKeyForField(fieldKey);
+    var permissions = Model.currentRecordPermissions || {};
+    var editable = Array.isArray(permissions.editableFieldKeys) ? permissions.editableFieldKeys : [];
+    return !!permissions.canEditRecord && editable.indexOf(permissionKey) !== -1;
+  },
+
+  applyCurrentRecordPermissions: function(student) {
+    Model.currentRecordPermissions = Model.evaluateRecordPermissions(student);
+    View.applyRolePermissions();
+    View.updateActionButtons();
   },
 
   syncIssuanceDatesOnce: function(changedField, patch) {
@@ -241,21 +263,42 @@ var Controller = {
   syncCurrentFormToModel: function(changedField) {
     var entry = Model.getCurrentBatchEntry();
     if (!entry) return;
+    if (changedField && !this.isFieldEditableForCurrentRecord(changedField)) return;
+    View.clearModalActionError("savebtn");
+    View.clearModalActionError("updateStudentBtn");
 
     var previous = Object.assign({}, entry.fields);
     var patch = this.getFormPatch();
     patch = this.syncIssuanceDatesOnce(changedField, patch);
 
-    if ((changedField === "soPrefix" || changedField === "soNumber") && !entry.hasExistingSO) {
+    if (changedField) {
+      var changedFieldId = null;
+      Object.keys(this.formFieldMap).forEach(function(inputId) {
+        if (Controller.formFieldMap[inputId] === changedField) changedFieldId = inputId;
+      });
+      if (changedFieldId === "so_prefix" || changedFieldId === "so_number") {
+        View.clearModalFieldError("so_prefix", "so_number");
+      } else if (changedFieldId) {
+        View.clearModalFieldError(changedFieldId);
+      }
+    }
+
+    if (changedField === "soPrefix" || changedField === "soNumber") {
       var typedSO = Model.formatSoNo(patch.soPrefix, patch.soNumber);
       if (typedSO && this.isDuplicateSOForRow(typedSO, entry._row)) {
-        alert("Duplicate SO number detected.");
+        View.setModalFieldError("so_prefix", "Duplicate SO number detected.", "so_number");
         patch.soPrefix = previous.soPrefix || "";
         patch.soNumber = previous.soNumber || "";
         var soPrefixEl = document.getElementById("so_prefix");
         var soNumberEl = document.getElementById("so_number");
         if (soPrefixEl) soPrefixEl.value = patch.soPrefix;
         if (soNumberEl) soNumberEl.value = patch.soNumber;
+      } else if (typedSO) {
+        View.clearModalFieldError("so_prefix", "so_number");
+      }
+      if (entry.overrides && Object.prototype.hasOwnProperty.call(entry.overrides, changedField)) {
+        var originalValue = String((entry.originalFields || {})[changedField] || "");
+        entry.overrides[changedField] = String(patch[changedField] || "") !== originalValue;
       }
     }
 
@@ -301,18 +344,77 @@ var Controller = {
     return inBatch;
   },
 
-  validateBatchEntries: function() {
-    if (!Model.batchStudents.length) return "No students in batch.";
-    var invalid = Model.batchStudents.find(function(entry) {
-      return !entry.previewSO;
+  getMissingRequiredFields: function(entry) {
+    if (!entry) return ["student entry"];
+    var keys = [];
+    if (!String(entry.fields.dateReceived || "").trim()) keys.push("dateReceived");
+    if (!String(entry.fields.dateAccomplished || "").trim()) keys.push("dateAccomplished");
+    if (!String(entry.fields.status || "").trim()) keys.push("status");
+    if (!String(entry.fields.dateForwarded || "").trim()) keys.push("dateForwarded");
+    if (!String(entry.previewSO || "").trim()) keys.push("soNo");
+    if (!String(entry.fields.series || "").trim()) keys.push("series");
+    if (!String(entry.fields.dateSOIssuance || "").trim()) keys.push("dateSOIssuance");
+    return keys;
+  },
+
+  showBatchValidationError: function(result) {
+    if (!result) return;
+    View.clearModalValidationErrors();
+    if (result.entry && String(Model.editingRowID) !== String(result.entry._row)) {
+      View.populateEditForm(result.entry);
+      View.renderSelectedBatchList();
+    }
+    (result.fieldKeys || []).forEach(function(key) {
+      var meta = Controller.validationFieldMap[key];
+      if (!meta) return;
+      var message = (result.fieldMessages && result.fieldMessages[key]) || (meta.label + " is required.");
+      View.setModalFieldError(meta.id, message, meta.partnerId);
     });
-    if (invalid) return "Missing SO number for " + (invalid.name || "a student") + ".";
+    if (result.actionTarget) {
+      View.setModalActionError(result.actionTarget, result.actionMessage || "Please review the highlighted fields.");
+    }
+  },
+
+  validateBatchEntriesDetailed: function(actionTarget) {
+    if (!Model.batchStudents.length) {
+      return {
+        actionTarget: actionTarget || "updateStudentBtn",
+        actionMessage: "No students in batch."
+      };
+    }
+
+    for (var m = 0; m < Model.batchStudents.length; m++) {
+      var entry = Model.batchStudents[m];
+      var missing = this.getMissingRequiredFields(entry);
+      if (missing.length) {
+        var fieldMessages = {};
+        missing.forEach(function(key) {
+          var meta = Controller.validationFieldMap[key];
+          if (meta) fieldMessages[key] = meta.label + " is required.";
+        });
+        return {
+          entry: entry,
+          fieldKeys: missing,
+          fieldMessages: fieldMessages,
+          actionTarget: actionTarget || "updateStudentBtn",
+          actionMessage: "Complete the required fields before continuing."
+        };
+      }
+    }
 
     var batchSoMap = {};
     for (var i = 0; i < Model.batchStudents.length; i++) {
       var so = String(Model.batchStudents[i].previewSO || "").trim();
       if (!so) continue;
-      if (batchSoMap[so]) return "Duplicate SO number detected.";
+      if (batchSoMap[so]) {
+        return {
+          entry: Model.batchStudents[i],
+          fieldKeys: ["soNo"],
+          fieldMessages: { soNo: "Duplicate SO number detected." },
+          actionTarget: actionTarget || "updateStudentBtn",
+          actionMessage: "Resolve the highlighted SO number before continuing."
+        };
+      }
       batchSoMap[so] = true;
     }
 
@@ -324,9 +426,442 @@ var Controller = {
         var rowSo = String(row["SO No."] || "").trim();
         return rowSo && rowSo === candidate && String(row._row) !== String(b._row);
       });
-      if (clash) return "Duplicate SO number detected.";
+      if (clash) {
+        return {
+          entry: b,
+          fieldKeys: ["soNo"],
+          fieldMessages: { soNo: "Duplicate SO number detected." },
+          actionTarget: actionTarget || "updateStudentBtn",
+          actionMessage: "Resolve the highlighted SO number before continuing."
+        };
+      }
     }
-    return "";
+
+    return null;
+  },
+
+  validateBatchEntries: function() {
+    var result = this.validateBatchEntriesDetailed("updateStudentBtn");
+    return result ? (result.actionMessage || "Please review the highlighted fields.") : "";
+  },
+
+  getExistingSoChangeEntries: function(targets) {
+    return (targets || []).filter(function(entry) {
+      return entry.hasExistingSO && String(entry.previewSO || "").trim() !== String(entry.existingSO || "").trim();
+    });
+  },
+
+  getExistingSoChangeMessage: function(entries) {
+    if (!entries || !entries.length) return "";
+    if (entries.length === 1) {
+      return "This student already has an SO number. Do you want to change it from " +
+        (entries[0].existingSO || "-") + " to " + (entries[0].previewSO || "-") + "?";
+    }
+    return entries.length + " students already have SO numbers. Do you want to save the edited SO numbers anyway?";
+  },
+
+  buildSavePayload: function(entry) {
+    return {
+      row: entry._row,
+      dateReceived: entry.fields.dateReceived || "",
+      dateAccomplished: entry.fields.dateAccomplished || "",
+      status: entry.fields.status || "",
+      remarks: entry.fields.remarks || "",
+      dateForwarded: entry.fields.dateForwarded || "",
+      soNo: entry.previewSO || "",
+      series: entry.fields.series || "",
+      dateSOIssuance: entry.fields.dateSOIssuance || ""
+    };
+  },
+
+  applySavedEntryToData: function(entry) {
+    var applySaved = function(row) {
+      if (String(row._row) !== String(entry._row)) return row;
+      row["Issuance and Encoding of No.: Date Received"] = entry.fields.dateReceived || "";
+      row["Issuance and Encoding of No.: Date Accomplished"] = entry.fields.dateAccomplished || "";
+      row["Issuance and Encoding of No.: Status"] = entry.fields.status || "";
+      row["Issuance and Encoding of No.: Remarks"] = entry.fields.remarks || "";
+      row["Issuance and Encoding of No.: Date Forwarded"] = entry.fields.dateForwarded || "";
+      row["SO No."] = entry.previewSO || "";
+      row["Series"] = entry.fields.series || "";
+      row["Date of SO Issuance"] = entry.fields.dateSOIssuance || "";
+      return row;
+    };
+
+    Model.fullData = Model.fullData.map(applySaved);
+    Model.filteredData = Model.filteredData.map(applySaved);
+
+    entry.hasExistingSO = !!String(entry.previewSO || "").trim();
+    entry.existingSO = entry.previewSO || "";
+    entry.originalPreviewSO = entry.previewSO || "";
+    entry.fields.soNo = entry.previewSO || "";
+    var parsedSavedSo = Model.parseSoNo(entry.previewSO || "");
+    entry.fields.soPrefix = parsedSavedSo.prefix || entry.fields.soPrefix || "";
+    entry.fields.soNumber = parsedSavedSo.number || entry.fields.soNumber || "";
+    entry.originalFields = Object.assign({}, entry.fields);
+    if (entry.overrides) {
+      Object.keys(entry.overrides).forEach(function(key) {
+        entry.overrides[key] = false;
+      });
+    }
+  },
+
+  summarizeSaveOutcomes: function(successes, failures) {
+    var summary = "Saved " + successes.length + " of " + (successes.length + failures.length);
+    if (!failures.length) return summary + " successfully.";
+    var first = (failures[0] && failures[0].result) ? failures[0].result : {};
+    var detail = first.message || "Unable to save one or more students.";
+    if (first.debugId) detail += " Debug ID: " + first.debugId;
+    return summary + ". " + failures.length + " failed. " + detail + " View details in History.";
+  },
+
+  createLocalFailureRecord: function(entry, payload, result) {
+    var now = new Date();
+    return {
+      localKey: "local-" + now.getTime() + "-" + String(entry && entry._row || ""),
+      logRow: result && result.logRow ? result.logRow : "",
+      row: String((result && result.row) || (entry && entry._row) || ""),
+      id: String((result && result.id) || (entry && entry.ID) || ""),
+      name: String((result && result.name) || (entry && entry.name) || ""),
+      payload: payload || {},
+      payloadJson: JSON.stringify(payload || {}),
+      code: String((result && result.code) || "CLIENT_RPC_FAILURE"),
+      message: String((result && result.message) || "The save request failed before the server returned a result."),
+      details: String((result && result.details) || ""),
+      debugId: String((result && result.debugId) || ""),
+      status: String((result && result.status) || "failed"),
+      retryResult: String((result && result.retryResult) || ""),
+      retryDebugId: String((result && result.retryDebugId) || ""),
+      dateSaved: now.getFullYear() + "-" +
+        String(now.getMonth() + 1).padStart(2, "0") + "-" +
+        String(now.getDate()).padStart(2, "0") + " " +
+        String(now.getHours()).padStart(2, "0") + ":" +
+        String(now.getMinutes()).padStart(2, "0") + ":" +
+        String(now.getSeconds()).padStart(2, "0")
+    };
+  },
+
+  upsertLocalFailureRecord: function(record) {
+    if (!record) return;
+    var matched = false;
+    Model.localSaveFailureRows = (Model.localSaveFailureRows || []).map(function(item) {
+      if (record.logRow && String(item.logRow || "") === String(record.logRow)) {
+        matched = true;
+        return Object.assign({}, item, record);
+      }
+      if (record.localKey && String(item.localKey || "") === String(record.localKey)) {
+        matched = true;
+        return Object.assign({}, item, record);
+      }
+      return item;
+    });
+    if (!matched) Model.localSaveFailureRows.unshift(record);
+  },
+
+  removeLocalFailureRecord: function(match) {
+    Model.localSaveFailureRows = (Model.localSaveFailureRows || []).filter(function(item) {
+      if (match.logRow && String(item.logRow || "") === String(match.logRow)) return false;
+      if (match.localKey && String(item.localKey || "") === String(match.localKey)) return false;
+      return true;
+    });
+  },
+
+  getMergedFailureRows: function(serverRows) {
+    var merged = Array.isArray(serverRows) ? serverRows.slice() : [];
+    var seen = {};
+    merged.forEach(function(item) {
+      if (item.logRow) seen["log:" + item.logRow] = true;
+      if (item.localKey) seen["local:" + item.localKey] = true;
+    });
+    (Model.localSaveFailureRows || []).forEach(function(item) {
+      var key = item.logRow ? "log:" + item.logRow : "local:" + item.localKey;
+      if (!seen[key]) {
+        merged.push(item);
+        seen[key] = true;
+      }
+    });
+    merged.sort(function(a, b) {
+      return String(b.dateSaved || "").localeCompare(String(a.dateSaved || ""));
+    });
+    return merged;
+  },
+
+  executeSaveTargets: function(targets) {
+    var idx = 0;
+    var successes = [];
+    var failures = [];
+
+    Model.isSavingBatch = true;
+    View.showSaveIndicator("Saving...", "info", 0);
+    View.clearModalActionError("savebtn");
+    View.setSaveButtonLoading(true);
+    View.updateActionButtons();
+
+    var updateNext = function() {
+      if (idx >= targets.length) {
+        successes.forEach(function(item) {
+          Controller.applySavedEntryToData(item.entry);
+        });
+        Model.batchConfirmed = false;
+        Model.batchHasChanges = Model.isBatchDirty();
+        Model.lastSaveOutcomeSummary = Controller.summarizeSaveOutcomes(successes, failures);
+        Controller.pendingSaveTargets = null;
+        Model.isSavingBatch = false;
+        Controller.renderPage(Model.currentPage);
+        View.renderSelectedBatchList();
+        View.setSaveButtonLoading(false);
+        View.updateActionButtons();
+        if (successes.length) {
+          Controller.loadHistoryData();
+        }
+        if (failures.length) {
+          View.setModalActionError("savebtn", Model.lastSaveOutcomeSummary);
+          View.showSaveIndicator(Model.lastSaveOutcomeSummary, "error", 5000);
+          Controller.loadSaveFailureHistory();
+        } else {
+          View.showSaveIndicator("Saved successfully", "success", 3000);
+        }
+        return;
+      }
+
+      var entry = targets[idx++];
+      var payload = Controller.buildSavePayload(entry);
+
+      Service.updateIssuanceColumns(
+        payload,
+        function(result) {
+          if (result && result.ok) {
+            successes.push({ entry: entry, result: result });
+            if (result.logRow) Controller.removeLocalFailureRecord({ logRow: result.logRow });
+          } else {
+            Controller.upsertLocalFailureRecord(Controller.createLocalFailureRecord(entry, payload, result));
+            failures.push({
+              entry: entry,
+              result: result || {
+                ok: false,
+                row: entry._row,
+                message: "The save did not complete.",
+                code: "UNKNOWN_SAVE_FAILURE",
+                debugId: ""
+              }
+            });
+          }
+          updateNext();
+        },
+        function(err) {
+          Service.logClientSaveFailure(payload, err && err.message ? err.message : "The save request failed before the server returned a result.", function(result) {
+            Controller.upsertLocalFailureRecord(Controller.createLocalFailureRecord(entry, payload, result));
+            failures.push({
+              entry: entry,
+              result: result || {
+                ok: false,
+                row: entry._row,
+                message: "The save request failed before the server returned a result.",
+                code: "CLIENT_RPC_FAILURE",
+                debugId: ""
+              }
+            });
+            updateNext();
+          }, function() {
+            Controller.upsertLocalFailureRecord(Controller.createLocalFailureRecord(entry, payload, {
+              row: entry._row,
+              id: entry.ID || "",
+              name: entry.name || "",
+              message: "The save request failed before the server returned a result.",
+              code: "CLIENT_RPC_FAILURE",
+              debugId: ""
+            }));
+            failures.push({
+              entry: entry,
+              result: {
+                ok: false,
+                row: entry._row,
+                message: "The save request failed before the server returned a result.",
+                code: "CLIENT_RPC_FAILURE",
+                debugId: ""
+              }
+            });
+            updateNext();
+          });
+        }
+      );
+    };
+
+    if (!targets.length) {
+      Model.isSavingBatch = false;
+      View.setSaveButtonLoading(false);
+      View.showSaveIndicator("No changes to save", "error", 2000);
+      return;
+    }
+
+    updateNext();
+  },
+
+  loadHistoryData: function() {
+    Model.isHistoryLoading = true;
+    View.renderHistoryMeta(null);
+    View.showHistoryLoading();
+
+    Service.getIssuanceHistory("", "", function(rows) {
+      Model.isHistoryLoading = false;
+      Model.historyRows = Array.isArray(rows) ? rows : [];
+      Model.historyLoadedOnce = true;
+      View.renderHistoryMeta({ summary: "Showing all updated students (" + Model.historyRows.length + " records)" });
+      View.renderHistoryRows(Model.historyRows);
+    }, function() {
+      Model.isHistoryLoading = false;
+      Model.historyRows = [];
+      Model.historyLoadedOnce = true;
+      View.renderHistoryMeta({ summary: "Showing all updated students (0 records)" });
+      View.renderHistoryRows([]);
+    });
+  },
+
+  loadSaveFailureHistory: function() {
+    Model.isSaveFailureLoading = true;
+    View.renderSaveFailureMeta("Loading failed save attempts...");
+    View.showSaveFailureLoading();
+
+    Service.getSaveFailureHistory(function(rows) {
+      Model.isSaveFailureLoading = false;
+      Model.saveFailureRows = Controller.getMergedFailureRows(Array.isArray(rows) ? rows : []);
+      Model.historyFailureLoadedOnce = true;
+      View.renderSaveFailureMeta("Showing failed save attempts (" + Model.saveFailureRows.length + " records)");
+      View.renderSaveFailureRows(Model.saveFailureRows);
+    }, function() {
+      Model.isSaveFailureLoading = false;
+      Model.saveFailureRows = Controller.getMergedFailureRows([]);
+      Model.historyFailureLoadedOnce = true;
+      View.renderSaveFailureMeta("Showing failed save attempts (" + Model.saveFailureRows.length + " records)");
+      View.renderSaveFailureRows(Model.saveFailureRows);
+    });
+  },
+
+  setActiveHistorySection: function(section) {
+    var nextSection = section === "failure" ? "failure" : "success";
+    Model.activeHistorySection = nextSection;
+    View.setActiveHistorySection(nextSection);
+  },
+
+  retryFailedSave: function(logRow) {
+    if (!logRow) return;
+    View.setRetryFailureButtonLoading(logRow, "", true);
+    View.showSaveIndicator("Retrying failed save...", "info", 0);
+    Service.retryFailedSave(logRow, function(result) {
+      View.setRetryFailureButtonLoading(logRow, "", false);
+      if (result && result.ok) {
+        if (result.row) {
+          Controller.syncDatabaseRow(result.row);
+        }
+        Controller.loadHistoryData();
+        Controller.loadSaveFailureHistory();
+        View.showSaveIndicator("Retry succeeded", "success", 3000);
+        if (Model.activeMainView !== "history") Controller.setActiveMainView("history");
+        Controller.setActiveHistorySection("failure");
+      } else {
+        Controller.loadSaveFailureHistory();
+        View.showSaveIndicator((result && result.message ? result.message : "Retry failed.") + (result && result.debugId ? " Debug ID: " + result.debugId : ""), "error", 5000);
+      }
+    }, function(err) {
+      View.setRetryFailureButtonLoading(logRow, "", false);
+      View.showSaveIndicator((err && err.message ? err.message : "Retry failed before the server returned a result."), "error", 5000);
+    });
+  },
+
+  retryLocalFailedSave: function(localKey) {
+    var failure = (Model.localSaveFailureRows || []).find(function(item) {
+      return String(item.localKey || "") === String(localKey || "");
+    });
+    if (!failure || !failure.payload) return;
+
+    View.setRetryFailureButtonLoading("", localKey, true);
+    View.showSaveIndicator("Retrying failed save...", "info", 0);
+    Service.updateIssuanceColumns(failure.payload, function(result) {
+      View.setRetryFailureButtonLoading("", localKey, false);
+      if (result && result.ok) {
+        if (result.row) Controller.syncDatabaseRow(result.row);
+        Controller.removeLocalFailureRecord({ localKey: localKey });
+        Controller.loadHistoryData();
+        Controller.loadSaveFailureHistory();
+        View.showSaveIndicator("Retry succeeded", "success", 3000);
+        Controller.setActiveMainView("history");
+        Controller.setActiveHistorySection("failure");
+        return;
+      }
+      Controller.upsertLocalFailureRecord(Object.assign({}, failure, {
+        message: (result && result.message) || failure.message,
+        code: (result && result.code) || failure.code,
+        debugId: (result && result.debugId) || failure.debugId,
+        retryResult: (result && result.message) || failure.retryResult,
+        retryDebugId: (result && result.debugId) || failure.retryDebugId
+      }));
+      Controller.loadSaveFailureHistory();
+      View.showSaveIndicator(((result && result.message) || "Retry failed.") + ((result && result.debugId) ? " Debug ID: " + result.debugId : ""), "error", 5000);
+    }, function(err) {
+      View.setRetryFailureButtonLoading("", localKey, false);
+      Controller.upsertLocalFailureRecord(Object.assign({}, failure, {
+        retryResult: err && err.message ? err.message : "Retry failed before the server returned a result."
+      }));
+      Controller.loadSaveFailureHistory();
+      View.showSaveIndicator((err && err.message ? err.message : "Retry failed before the server returned a result."), "error", 5000);
+    });
+  },
+
+  openHistoryForFocusedStudent: function() {
+    this.setActiveMainView("history");
+    this.setActiveHistorySection(Model.activeHistorySection || "success");
+    this.loadHistoryData();
+    this.loadSaveFailureHistory();
+  },
+
+  confirmExistingSoChangeSave: function() {
+    if (!this.pendingSaveTargets || !this.pendingSaveTargets.length) {
+      View.closeSoChangeConfirmModal();
+      return;
+    }
+    var targets = this.pendingSaveTargets.slice();
+    this.pendingSaveTargets = null;
+    View.closeSoChangeConfirmModal();
+    this.executeSaveTargets(targets);
+  },
+
+  cancelExistingSoChangeSave: function() {
+    this.pendingSaveTargets = null;
+    View.closeSoChangeConfirmModal();
+  },
+
+  requestOpenStudentEditor: function(student) {
+    if (!student) return;
+    var category = Model.getVerificationCategory(student["Verification Status"]);
+    if (category === "verified") {
+      View.openEditModal(student);
+      return;
+    }
+    this.pendingStatusEditStudent = student;
+    this.pendingStatusAction = "open";
+    var statusLabel = category === "deficiency" ? "Deficiency" : "Unverified";
+    View.openStatusEditConfirmModal("This student is currently marked as " + statusLabel + ". Do you want to continue editing this record?");
+  },
+
+  confirmStatusEditOpen: function() {
+    var student = this.pendingStatusEditStudent;
+    var action = this.pendingStatusAction;
+    this.pendingStatusEditStudent = null;
+    this.pendingStatusAction = null;
+    if (action === "batch-add") Model.statusEditConfirmed = true;
+    View.closeStatusEditConfirmModal();
+    if (!student) return;
+    if (action === "batch-add") {
+      this.addBatchStudent(student._row, true);
+      return;
+    }
+    View.openEditModal(student);
+  },
+
+  cancelStatusEditOpen: function() {
+    this.pendingStatusEditStudent = null;
+    this.pendingStatusAction = null;
+    View.closeStatusEditConfirmModal();
   },
 
   selectBatchStudent: function(rowID) {
@@ -334,27 +869,38 @@ var Controller = {
     var entry = Model.getBatchEntryByRow(rowID);
     if (entry) {
       View.populateEditForm(entry);
+      this.applyCurrentRecordPermissions(Model.fullData.find(function(s) { return String(s._row) === String(rowID); }) || null);
       View.renderSelectedBatchList();
     }
   },
 
   getBatchAddRestrictionReason: function(student) {
     if (!student) return "";
-    var hasSO = !!String(student["SO No."] || "").trim();
-    if (hasSO) return "Cannot add student with existing SO number";
-
     var issuanceStatus = String(student["Issuance and Encoding of No.: Status"] || "").trim().toLowerCase();
     if (issuanceStatus === "approved") return "Cannot add student with Issuance Status Approved";
     return "";
   },
 
-  addBatchStudent: function(rowID) {
+  addBatchStudent: function(rowID, skipStatusPrompt) {
     this.syncCurrentFormToModel();
     var student = Model.fullData.find(function(s){ return String(s._row) === String(rowID); });
     if (!student) return;
+    var permissionCheck = Model.evaluateRecordPermissions(student);
+    if (!permissionCheck.canEditRecord) {
+      View.setModalActionError("updateStudentBtn", permissionCheck.denyReason || "You do not have permission to edit this record.");
+      return;
+    }
     var restrictionReason = this.getBatchAddRestrictionReason(student);
     if (restrictionReason) {
-      alert(restrictionReason);
+      View.setModalActionError("updateStudentBtn", restrictionReason);
+      return;
+    }
+    var category = Model.getVerificationCategory(student["Verification Status"]);
+    if (!skipStatusPrompt && !Model.statusEditConfirmed && category !== "verified") {
+      this.pendingStatusEditStudent = student;
+      this.pendingStatusAction = "batch-add";
+      var statusLabel = category === "deficiency" ? "Deficiency" : "Unverified";
+      View.openStatusEditConfirmModal("This student is currently marked as " + statusLabel + ". Do you want to continue editing and adding this record to the batch?");
       return;
     }
 
@@ -366,7 +912,10 @@ var Controller = {
     View.updateActionButtons();
 
     var anchorEntry = Model.getFirstWithoutSOEntry() || Model.batchStudents[0];
-    if (anchorEntry) View.populateEditForm(anchorEntry);
+    if (anchorEntry) {
+      View.populateEditForm(anchorEntry);
+      this.applyCurrentRecordPermissions(Model.fullData.find(function(s) { return String(s._row) === String(anchorEntry._row); }) || null);
+    }
     this.searchBatchStudents((document.getElementById("batchSearchInput") || {}).value || "");
   },
 
@@ -385,6 +934,7 @@ var Controller = {
     Model.batchHasChanges = Model.isBatchDirty();
     if (wasEditing || !Model.getCurrentBatchEntry()) {
       View.populateEditForm(Model.batchStudents[0]);
+      this.applyCurrentRecordPermissions(Model.fullData.find(function(s) { return String(s._row) === String(Model.batchStudents[0]._row); }) || null);
     }
     View.renderSelectedBatchList();
     View.updateActionButtons();
@@ -393,14 +943,20 @@ var Controller = {
 
   confirmPreviewUpdate: function() {
     this.syncCurrentFormToModel();
+    View.clearModalValidationErrors();
+    if (!(Model.currentRecordPermissions && Model.currentRecordPermissions.canEditRecord)) {
+      View.setModalActionError("updateStudentBtn", (Model.currentRecordPermissions && Model.currentRecordPermissions.denyReason) || "You do not have permission to edit this record.");
+      View.updateActionButtons();
+      return;
+    }
     if (!Model.batchHasChanges) {
       View.showSaveIndicator("No changes to update", "error", 2000);
       View.updateActionButtons();
       return;
     }
-    var validationError = this.validateBatchEntries();
+    var validationError = this.validateBatchEntriesDetailed("updateStudentBtn");
     if (validationError) {
-      alert(validationError);
+      this.showBatchValidationError(validationError);
       Model.batchConfirmed = false;
       View.updateActionButtons();
       return;
@@ -538,8 +1094,14 @@ var Controller = {
   },
 
   saveEdit: function() {
+    View.clearModalValidationErrors();
+    if (!(Model.currentRecordPermissions && Model.currentRecordPermissions.canEditRecord)) {
+      View.setModalActionError("savebtn", (Model.currentRecordPermissions && Model.currentRecordPermissions.denyReason) || "You do not have permission to edit this record.");
+      View.updateActionButtons();
+      return;
+    }
     if (!Model.batchConfirmed) {
-      alert("Please click Update to confirm changes before saving.");
+      View.setModalActionError("savebtn", "Click Update first to confirm the current batch changes.");
       View.updateActionButtons();
       return;
     }
@@ -548,81 +1110,206 @@ var Controller = {
       View.updateActionButtons();
       return;
     }
-    var validationError = this.validateBatchEntries();
+    var validationError = this.validateBatchEntriesDetailed("savebtn");
     if (validationError) {
-      alert(validationError);
+      this.showBatchValidationError(validationError);
       Model.batchConfirmed = false;
       View.updateActionButtons();
       return;
     }
 
     var targets = Model.batchStudents.slice();
-    var byRow = {};
-    targets.forEach(function(t) { byRow[String(t._row)] = t; });
-    var idx = 0;
-    var failed = 0;
+    var existingSoChanges = this.getExistingSoChangeEntries(targets);
+    if (existingSoChanges.length) {
+      this.pendingSaveTargets = targets;
+      View.openSoChangeConfirmModal(this.getExistingSoChangeMessage(existingSoChanges));
+      return;
+    }
 
-    View.showSaveIndicator("Saving...", "info", 0);
-
-    var updateNext = function() {
-      if (idx >= targets.length) {
-        var applySaved = function(row) {
-          var entry = byRow[String(row._row)];
-          if (!entry) return row;
-          row["Issuance and Encoding of No.: Date Received"] = entry.fields.dateReceived || "";
-          row["Issuance and Encoding of No.: Date Accomplished"] = entry.fields.dateAccomplished || "";
-          row["Issuance and Encoding of No.: Status"] = entry.fields.status || "";
-          row["Issuance and Encoding of No.: Remarks"] = entry.fields.remarks || "";
-          row["Issuance and Encoding of No.: Date Forwarded"] = entry.fields.dateForwarded || "";
-          row["SO No."] = entry.previewSO || "";
-          row["Series"] = entry.fields.series || "";
-          row["Date of SO Issuance"] = entry.fields.dateSOIssuance || "";
-          return row;
-        };
-
-        Model.fullData = Model.fullData.map(applySaved);
-        Model.filteredData = Model.filteredData.map(applySaved);
-        Model.batchConfirmed = false;
-        Model.batchHasChanges = false;
-        Controller.renderPage(Model.currentPage);
-        View.updateActionButtons();
-        if (failed) {
-          View.showSaveIndicator("Saved with " + failed + " failure(s)", "error", 3500);
-        } else {
-          View.showSaveIndicator("Saved successfully", "success", 3000);
-        }
-        return;
-      }
-
-      var entry = targets[idx++];
-      var payload = {
-        row: entry._row,
-        dateReceived: entry.fields.dateReceived || "",
-        dateAccomplished: entry.fields.dateAccomplished || "",
-        status: entry.fields.status || "",
-        remarks: entry.fields.remarks || "",
-        dateForwarded: entry.fields.dateForwarded || "",
-        soNo: entry.previewSO || "",
-        series: entry.fields.series || "",
-        dateSOIssuance: entry.fields.dateSOIssuance || ""
-      };
-
-      Service.updateIssuanceColumns(
-        payload,
-        function() { updateNext(); },
-        function() {
-          failed += 1;
-          updateNext();
-        }
-      );
-    };
-
-    updateNext();
+    this.executeSaveTargets(targets);
   },
 
   onFormFieldEvent: function(fieldKey) {
     this.syncCurrentFormToModel(fieldKey);
   },
+
+  loadAccountName: function() {
+    Service.getAccountName(function(name) {
+      var el = document.getElementById('accountName');
+      if (el) el.textContent = name || "";
+    });
+  },
+
+  loadUserDebugInfo: function() {
+    Service.getCurrentUserDebugInfo(function(debugInfo) {
+      Model.userDebugInfo = debugInfo || Model.userDebugInfo;
+      if (typeof console !== "undefined" && console.groupCollapsed) {
+        console.groupCollapsed("[Issuance] Account Debug");
+        console.log("Account debug info:", Model.userDebugInfo);
+        console.groupEnd();
+      } else if (typeof console !== "undefined" && console.log) {
+        console.log("[Issuance] Account Debug", Model.userDebugInfo);
+      }
+    });
+  },
+
+  loadNavbarLogo: function() {
+    var shell = document.getElementById("navbarLogoShell");
+    var logoImage = document.getElementById("navbarLogoImage");
+    var fallback = document.getElementById("navbarLogoFallback");
+    var loading = document.getElementById("navbarLogoLoading");
+
+    if (shell) {
+      shell.classList.add("is-loading");
+      shell.classList.remove("is-ready");
+    }
+    if (loading) loading.classList.remove("d-none");
+    if (fallback) fallback.classList.remove("d-none");
+
+    Service.getNavbarLogoData(function(result) {
+      var dataUrl = result && result.dataUrl ? String(result.dataUrl).trim() : "";
+
+      if (!dataUrl) {
+        if (shell) shell.classList.remove("is-loading");
+        if (loading) loading.classList.add("d-none");
+        if (logoImage) {
+          logoImage.onload = null;
+          logoImage.onerror = null;
+          logoImage.removeAttribute("src");
+          logoImage.classList.add("d-none");
+        }
+        if (fallback) fallback.classList.remove("d-none");
+        return;
+      }
+
+      if (!logoImage) {
+        if (shell) shell.classList.remove("is-loading");
+        if (loading) loading.classList.add("d-none");
+        return;
+      }
+
+      logoImage.onload = function() {
+        if (shell) {
+          shell.classList.remove("is-loading");
+          shell.classList.add("is-ready");
+        }
+        if (loading) loading.classList.add("d-none");
+        if (fallback) fallback.classList.add("d-none");
+        logoImage.classList.remove("d-none");
+      };
+
+      logoImage.onerror = function() {
+        if (shell) shell.classList.remove("is-loading");
+        if (loading) loading.classList.add("d-none");
+        logoImage.removeAttribute("src");
+        logoImage.classList.add("d-none");
+        if (fallback) fallback.classList.remove("d-none");
+      };
+
+      logoImage.src = dataUrl;
+      logoImage.classList.remove("d-none");
+    }, function() {
+      if (shell) shell.classList.remove("is-loading");
+      if (logoImage) {
+        logoImage.onload = null;
+        logoImage.onerror = null;
+        logoImage.removeAttribute("src");
+        logoImage.classList.add("d-none");
+      }
+      if (loading) loading.classList.add("d-none");
+      if (fallback) fallback.classList.remove("d-none");
+    });
+  },
+
+  loadUserRole: function() {
+    Service.getUserAccessContext(function(access) {
+      Model.accessContext = access || Model.accessContext;
+      Model.userRole = access && (access.actions && (access.actions.update || access.actions.create || access.actions["delete"])) ? "Editor" : "Viewer";
+      var currentStudent = Model.getCurrentStudent();
+      if (currentStudent) {
+        Model.currentRecordPermissions = Model.evaluateRecordPermissions(currentStudent);
+      }
+      View.applyRolePermissions();
+      View.updateActionButtons();
+    });
+  },
+
+  loadUserPositionFieldSchema: function() {
+    Service.getUserPositionFieldSchema(function(schema) {
+      Model.userPositionFieldSchema = schema || Model.userPositionFieldSchema;
+      View.renderPositionFieldSchema();
+    });
+  },
+
+  startDatabaseRowPolling: function() {
+    setInterval(function() {
+      if (Model.isSyncingRow) return;
+
+      Service.getDatabaseRowUpdateInfo(function(info) {
+        if (!info || !info.updatedAt) return;
+        if (String(info.updatedAt) === String(Model.lastDatabaseUpdateAt)) return;
+
+        Model.lastDatabaseUpdateAt = String(info.updatedAt);
+        var sheetName = String(info.sheet || "");
+
+        if (sheetName === "Accounts" || sheetName === "Users" || sheetName === "User Access" || sheetName === "Data Types") {
+          Controller.loadAccountName();
+          Controller.loadUserDebugInfo();
+          Controller.loadUserRole();
+          Controller.loadUserPositionFieldSchema();
+          Controller.initData();
+          return;
+        }
+
+        var rowNumber = Number(info.row);
+        if (!rowNumber || rowNumber < 2) return;
+
+        Controller.syncDatabaseRow(rowNumber);
+      });
+    }, 10000);
+  },
+
+  syncDatabaseRow: function(rowNumber) {
+    Model.isSyncingRow = true;
+
+    Service.getDatabaseRow(rowNumber, function(updatedRow) {
+      Model.isSyncingRow = false;
+      if (!updatedRow || !updatedRow._row) return;
+
+      var replaced = false;
+
+      Model.fullData = Model.fullData.map(function(row) {
+        if (String(row._row) === String(updatedRow._row)) {
+          replaced = true;
+          return updatedRow;
+        }
+        return row;
+      })
+      
+      if (!replaced) {
+        return;
+      }
+
+      if (Model.searchMode) {
+        Controller.doSearch(Model.lastMainSearchTerm || "");
+      } else {
+        Model.filteredData = Model.fullData.filter(function(r) {
+          return true;
+        });
+        Model.filteredData = Model.applyMainViewFilters(Model.fullData);
+        Controller.renderPage(Model.currentPage);
+      }
+
+      Model.recomputeBatchSoPreviews();
+      View.renderSelectedBatchList();
+      if (Model.editingRowID) {
+        Controller.applyCurrentRecordPermissions(Model.getCurrentStudent());
+      }
+    }, function() {
+      Model.isSyncingRow = false;
+    });
+  },
+
 
   initEventListeners: function() {
     if (Model.listenersBound) return;
@@ -720,7 +1407,17 @@ var Controller = {
         var tr = e.target.closest("tr");
         if (tr && tr.dataset.row) {
           var student = Model.fullData.find(function(s) { return String(s._row) === String(tr.dataset.row); });
-          if (student) View.openEditModal(student);
+          if (student) Controller.requestOpenStudentEditor(student);
+        }
+      });
+    }
+    var resultsMobile = document.getElementById("searchResultsMobile");
+    if (resultsMobile) {
+      resultsMobile.addEventListener("click", function(e) {
+        var card = e.target.closest("[data-row]");
+        if (card && card.dataset.row) {
+          var student = Model.fullData.find(function(s) { return String(s._row) === String(card.dataset.row); });
+          if (student) Controller.requestOpenStudentEditor(student);
         }
       });
     }
@@ -778,30 +1475,55 @@ var Controller = {
       });
     }
 
-    var viewHistoryFab = document.getElementById("viewHistoryFab");
-    if (viewHistoryFab) {
-      viewHistoryFab.addEventListener("click", function() {
+    var navHomeBtn = document.getElementById("navHomeBtn");
+    if (navHomeBtn) {
+      navHomeBtn.addEventListener("click", function() {
+        Controller.setActiveMainView("home");
+      });
+    }
+
+    var navReportBtn = document.getElementById("navReportBtn");
+    if (navReportBtn) {
+      navReportBtn.addEventListener("click", function() {
+        Controller.setActiveMainView("report");
+      });
+    }
+
+    var navHistoryBtn = document.getElementById("navHistoryBtn");
+    if (navHistoryBtn) {
+      navHistoryBtn.addEventListener("click", function() {
         Controller.openHistoryForFocusedStudent();
       });
     }
-    var viewHistoryText = document.getElementById("viewHistoryText");
-    if (viewHistoryText) {
-      viewHistoryText.addEventListener("click", function(e) {
-        e.stopPropagation();
-        Controller.openHistoryForFocusedStudent();
+
+    var historySuccessTab = document.getElementById("historySuccessTab");
+    if (historySuccessTab) {
+      historySuccessTab.addEventListener("click", function() {
+        Controller.setActiveHistorySection("success");
       });
-      viewHistoryText.style.cursor = "pointer";
     }
 
-    var closeHistoryBtn = document.getElementById("closeHistoryBtn");
-    if (closeHistoryBtn) {
-      closeHistoryBtn.addEventListener("click", function() { View.closeHistoryModal(); });
+    var historyFailureTab = document.getElementById("historyFailureTab");
+    if (historyFailureTab) {
+      historyFailureTab.addEventListener("click", function() {
+        Controller.setActiveHistorySection("failure");
+      });
     }
 
-    var historyModal = document.getElementById("historyModal");
-    if (historyModal) {
-      historyModal.addEventListener("click", function(e) {
-        if (e.target === historyModal) View.closeHistoryModal();
+    var historyFailureResults = document.getElementById("historyFailureResults");
+    if (historyFailureResults) {
+      historyFailureResults.addEventListener("click", function(e) {
+        var retryBtn = e.target.closest(".retry-failure-btn");
+        if (!retryBtn) return;
+        var logRow = retryBtn.getAttribute("data-log-row");
+        var localKey = retryBtn.getAttribute("data-local-key");
+        if (logRow) {
+          Controller.retryFailedSave(logRow);
+          return;
+        }
+        if (localKey) {
+          Controller.retryLocalFailedSave(localKey);
+        }
       });
     }
 

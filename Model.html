@@ -28,7 +28,69 @@ var Model = {
   listenersBound: false,
   lastFocusedStudentRow: null,
   historyRows: [],
+  saveFailureRows: [],
+  localSaveFailureRows: [],
   isHistoryLoading: false,
+  isSaveFailureLoading: false,
+  isSavingBatch: false,
+  userRole: "Viewer",
+  accessContext: {
+    email: "",
+    knownUser: false,
+    name: "",
+    position: "",
+    accessType: "",
+    profileId: "",
+    scope: "all",
+    actions: { create: false, read: true, update: false, delete: false },
+    isPrivileged: false,
+    editableFieldKeys: [],
+    readOnlyFieldKeys: [],
+    canUpdateAny: false,
+    canEditRecord: false,
+    isAssigned: false,
+    assignmentColumn: "",
+    denyReason: ""
+  },
+  userDebugInfo: {
+    activeEmail: "",
+    effectiveEmail: "",
+    resolvedEmail: "",
+    resolvedSource: "",
+    userFound: false,
+    profileFound: false,
+    denyReason: ""
+  },
+  userPositionFieldSchema: {
+    sessionEmail: "",
+    source: "",
+    position: "",
+    accessType: "",
+    profileId: "",
+    knownUser: false,
+    isPrivileged: false,
+    fields: [],
+    placeholderFields: [],
+    liveIssuanceFields: [],
+    denyReason: ""
+  },
+  recordViewConfig: {
+    mode: "developer",
+    supportsIssuanceEditor: true,
+    showVerificationFilters: true,
+    dataColumns: [],
+    tableColumns: [],
+    modalFields: []
+  },
+  currentRecordPermissions: null,
+  lastDatabaseUpdateAt: "0",
+  isSyncingRow: false,
+  statusEditConfirmed: false,
+  activeMainView: "home",
+  historyLoadedOnce: false,
+  historyFailureLoadedOnce: false,
+  activeHistorySection: "success",
+  lastSaveOutcomeSummary: "",
 
   setEditingRow: function(id) {
     this.editingRowID = id;
@@ -40,6 +102,8 @@ var Model = {
     this.batchStudents = [];
     this.batchConfirmed = false;
     this.batchHasChanges = false;
+    this.statusEditConfirmed = false;
+    this.currentRecordPermissions = null;
   },
 
   setLastFocusedStudent: function(rowID) {
@@ -48,6 +112,54 @@ var Model = {
 
   getCurrentStudent: function() {
     return this.fullData.find(function(r) { return String(r._row) === String(Model.editingRowID); });
+  },
+
+  shouldUseVerificationFilter: function() {
+    return !!(this.recordViewConfig && this.recordViewConfig.showVerificationFilters);
+  },
+
+  applyMainViewFilters: function(rows) {
+    var source = Array.isArray(rows) ? rows : [];
+    if (!this.shouldUseVerificationFilter()) return source.slice();
+    return source.filter(function(r) {
+      return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
+    });
+  },
+
+  evaluateRecordPermissions: function(student) {
+    var base = this.accessContext || {};
+    var actions = base.actions || { create: false, read: true, update: false, delete: false };
+    var editableFieldKeys = Array.isArray(base.editableFieldKeys) ? base.editableFieldKeys.slice() : [];
+    var assignmentColumn = String(base.assignmentColumn || "");
+    var assignmentValue = student ? String(student[assignmentColumn] || "").trim() : "";
+    var assignedEmailsMatch = assignmentValue.toLowerCase().match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/g);
+    var assignedEmails = assignedEmailsMatch ? assignedEmailsMatch : [];
+    var userEmail = String(base.email || "").trim().toLowerCase();
+    var isAssigned = !assignmentValue ? false : assignedEmails.indexOf(userEmail) !== -1;
+    var isPrivileged = !!base.isPrivileged;
+    var canEditRecord = !!actions.update && !!editableFieldKeys.length && (isPrivileged ? true : (base.scope === "all" ? true : isAssigned));
+    var denyReason = "";
+    if (!base.email) {
+      denyReason = "Unable to determine the current signed-in user.";
+    } else if (!base.knownUser) {
+      denyReason = base.denyReason || "Your email is not registered in the Users sheet.";
+    } else if (!actions.update) {
+      denyReason = base.denyReason || "Your access type does not allow updates.";
+    } else if (!editableFieldKeys.length) {
+      denyReason = base.denyReason || "Your position does not allow editing issuance fields.";
+    } else if (base.scope === "assigned" && !assignmentColumn && !isPrivileged) {
+      denyReason = "No assignment field mapping exists for issuance updates.";
+    } else if (base.scope === "assigned" && !isAssigned) {
+      denyReason = "This record is not assigned to your email.";
+    }
+    return {
+      canEditRecord: canEditRecord,
+      isAssigned: isAssigned,
+      editableFieldKeys: editableFieldKeys,
+      readOnlyFieldKeys: Array.isArray(base.readOnlyFieldKeys) ? base.readOnlyFieldKeys.slice() : [],
+      assignmentValue: assignmentValue,
+      denyReason: denyReason
+    };
   },
 
   parseSoNo: function(soNo) {
@@ -116,6 +228,7 @@ var Model = {
       remarks: false,
       dateForwarded: false,
       soPrefix: false,
+      soNumber: false,
       series: false,
       dateSOIssuance: false
     };
@@ -332,6 +445,7 @@ var Model = {
     var basePrefix = "";
     var nextNumber = 0;
     var numberWidth = 4;
+    var hasAnchorManualSeed = false;
 
     if (firstWithoutSO) {
       var manualFirst = this.formatSoNo(firstWithoutSO.fields.soPrefix, firstWithoutSO.fields.soNumber);
@@ -342,6 +456,7 @@ var Model = {
         var manualInfo = this.toNumberAndWidth(parsedFirst.number);
         nextNumber = manualInfo.value || 0;
         numberWidth = Math.max(numberWidth, manualInfo.width || 0);
+        hasAnchorManualSeed = true;
       } else {
         var maxInfo = this.getMaxNumberInfoForPrefix(basePrefix);
         nextNumber = maxInfo.value;
@@ -351,8 +466,10 @@ var Model = {
 
     this.batchStudents.forEach(function(entry) {
       if (entry.hasExistingSO) {
-        entry.previewSO = entry.existingSO;
-        entry.fields.soNo = entry.existingSO;
+        var editedExistingSO = Model.formatSoNo(entry.fields.soPrefix, entry.fields.soNumber);
+        var activeExistingSO = editedExistingSO || entry.existingSO;
+        entry.previewSO = activeExistingSO;
+        entry.fields.soNo = activeExistingSO;
         if (entry.previewSO) usedSo[entry.previewSO] = true;
       }
     });
@@ -364,19 +481,18 @@ var Model = {
 
       if (entry.isFirstWithoutSO) {
         var firstManual = Model.formatSoNo(entry.fields.soPrefix, entry.fields.soNumber);
-        var candidateFirst = "";
-        if (firstManual) {
-          candidateFirst = firstManual;
-        } else {
-          do {
-            candidateFirst = Model.getIncrementedSO(basePrefix, Model.formatWithWidth(nextNumber, numberWidth), numberWidth);
-            nextNumber = Model.toNumberAndWidth(Model.parseSoNo(candidateFirst).number).value;
-          } while (usedSo[candidateFirst]);
+        if (!firstManual) {
+          entry.previewSO = "";
+          entry.fields.soNo = "";
+          return;
         }
+        var candidateFirst = firstManual;
+        var parsedCandidate = Model.parseSoNo(candidateFirst);
         entry.previewSO = candidateFirst;
         entry.fields.soNo = candidateFirst;
+        entry.fields.soPrefix = parsedCandidate.prefix || basePrefix;
+        entry.fields.soNumber = parsedCandidate.number || "";
         usedSo[candidateFirst] = true;
-        var parsedCandidate = Model.parseSoNo(candidateFirst);
         if (parsedCandidate.prefix === basePrefix) {
           var parsedNum = Number(parsedCandidate.number);
           if (!isNaN(parsedNum) && parsedNum > nextNumber) nextNumber = parsedNum;
@@ -399,6 +515,12 @@ var Model = {
           }
           return;
         }
+      }
+
+      if (!hasAnchorManualSeed) {
+        entry.previewSO = "";
+        entry.fields.soNo = "";
+        return;
       }
 
       var candidate = "";

@@ -1,0 +1,59 @@
+<section id="historyView" class="history-view d-none" aria-label="History view">
+  <div class="history-page-card shadow">
+    <div class="d-flex justify-content-between align-items-center mb-2 gap-3 flex-wrap">
+      <div>
+        <span class="report-placeholder-kicker">History</span>
+        <h2 class="report-placeholder-title mb-1">Issuance History</h2>
+      </div>
+      <div class="history-section-tabs" role="tablist" aria-label="History sections">
+        <button type="button" class="history-section-tab is-active" id="historySuccessTab" data-history-section="success" aria-pressed="true">Save History</button>
+        <button type="button" class="history-section-tab" id="historyFailureTab" data-history-section="failure" aria-pressed="false">Failed Saves</button>
+      </div>
+    </div>
+
+    <div id="historySuccessSection" class="history-section-panel">
+      <div id="historyMeta" class="small text-muted mb-3"></div>
+      <div class="history-page-table-wrap">
+        <table class="table table-sm table-striped align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Student Name</th>
+              <th>Date Received</th>
+              <th>Date Accomplished</th>
+              <th>Status</th>
+              <th>Remarks</th>
+              <th>Date Forwarded</th>
+              <th>SO No.</th>
+              <th>Series</th>
+              <th>Date of SO Issuance</th>
+              <th>Date Saved</th>
+            </tr>
+          </thead>
+          <tbody id="historyResults"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="historyFailureSection" class="history-section-panel d-none">
+      <div id="historyFailureMeta" class="small text-muted mb-3"></div>
+      <div class="history-page-table-wrap">
+        <table class="table table-sm table-striped align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Student Name</th>
+              <th>Row</th>
+              <th>Message</th>
+              <th>Code</th>
+              <th>Debug ID</th>
+              <th>Status</th>
+              <th>Retry Result</th>
+              <th>Logged At</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="historyFailureResults"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>

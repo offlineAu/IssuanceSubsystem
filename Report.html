@@ -1,0 +1,67 @@
+<section id="reportView" class="report-view d-none" aria-label="Report analytics view">
+  <div class="report-shell">
+    <div class="report-header-card">
+      <div>
+        <span class="report-placeholder-kicker">Analytics</span>
+        <h2 class="report-placeholder-title">Issuance overview</h2>
+        <p class="report-placeholder-copy">Live summaries update from the dataset currently loaded in the app.</p>
+      </div>
+      <div id="reportDatasetHint" class="report-dataset-hint"></div>
+    </div>
+
+    <div class="report-summary-grid">
+      <div class="report-stat-card">
+        <span class="report-stat-label">Loaded Students</span>
+        <strong id="reportTotalCount" class="report-stat-value">0</strong>
+      </div>
+      <div class="report-stat-card">
+        <span class="report-stat-label">Verified</span>
+        <strong id="reportVerifiedCount" class="report-stat-value">0</strong>
+      </div>
+      <div class="report-stat-card">
+        <span class="report-stat-label">Deficiency</span>
+        <strong id="reportDeficiencyCount" class="report-stat-value">0</strong>
+      </div>
+      <div class="report-stat-card">
+        <span class="report-stat-label">Unverified</span>
+        <strong id="reportUnverifiedCount" class="report-stat-value">0</strong>
+      </div>
+    </div>
+
+    <div class="report-chart-grid">
+      <section class="report-card">
+        <div class="report-card-header">
+          <h3>Verification Breakdown</h3>
+          <span id="reportMatchCount" class="report-card-meta"></span>
+        </div>
+        <div id="reportStatusBars" class="report-bars"></div>
+      </section>
+
+      <section class="report-card">
+        <div class="report-card-header">
+          <h3>Top HEIs</h3>
+          <span class="report-card-meta">Current result set</span>
+        </div>
+        <div id="reportHeiBars" class="report-bars"></div>
+      </section>
+    </div>
+
+    <div class="report-chart-grid">
+      <section class="report-card">
+        <div class="report-card-header">
+          <h3>Assigned Person</h3>
+          <span class="report-card-meta">Current result set</span>
+        </div>
+        <div id="reportAssignedBars" class="report-bars"></div>
+      </section>
+
+      <section class="report-card">
+        <div class="report-card-header">
+          <h3>Issuance Progress Snapshot</h3>
+          <span class="report-card-meta">Completion by current filters</span>
+        </div>
+        <div id="reportProgressBars" class="report-bars"></div>
+      </section>
+    </div>
+  </div>
+</section>

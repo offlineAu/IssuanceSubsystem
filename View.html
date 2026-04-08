@@ -23,10 +23,452 @@ var View = {
     return document.getElementById(id);
   },
 
+  setActiveMainView: function(viewName) {
+    var home = this.getEl("homeView");
+    var report = this.getEl("reportView");
+    var history = this.getEl("historyView");
+    var homeBtn = this.getEl("navHomeBtn");
+    var reportBtn = this.getEl("navReportBtn");
+    var historyBtn = this.getEl("navHistoryBtn");
+    var isReport = viewName === "report";
+    var isHistory = viewName === "history";
+
+    if (home) home.classList.toggle("d-none", isReport || isHistory);
+    if (report) report.classList.toggle("d-none", !isReport);
+    if (history) history.classList.toggle("d-none", !isHistory);
+    if (homeBtn) {
+      homeBtn.classList.toggle("is-active", !isReport && !isHistory);
+      homeBtn.setAttribute("aria-pressed", String(!isReport && !isHistory));
+    }
+    if (reportBtn) {
+      reportBtn.classList.toggle("is-active", isReport);
+      reportBtn.setAttribute("aria-pressed", String(isReport));
+    }
+    if (historyBtn) {
+      historyBtn.classList.toggle("is-active", isHistory);
+      historyBtn.setAttribute("aria-pressed", String(isHistory));
+    }
+  },
+
+  setActiveHistorySection: function(section) {
+    var success = this.getEl("historySuccessSection");
+    var failure = this.getEl("historyFailureSection");
+    var successBtn = this.getEl("historySuccessTab");
+    var failureBtn = this.getEl("historyFailureTab");
+    var isFailure = section === "failure";
+
+    if (success) success.classList.toggle("d-none", isFailure);
+    if (failure) failure.classList.toggle("d-none", !isFailure);
+    if (successBtn) {
+      successBtn.classList.toggle("is-active", !isFailure);
+      successBtn.setAttribute("aria-pressed", String(!isFailure));
+    }
+    if (failureBtn) {
+      failureBtn.classList.toggle("is-active", isFailure);
+      failureBtn.setAttribute("aria-pressed", String(isFailure));
+    }
+  },
+
+  formatReportCount: function(value) {
+    return Number(value || 0).toLocaleString();
+  },
+
+  buildReportBarRows: function(items, options) {
+    options = options || {};
+    var emptyMessage = options.emptyMessage || "No data available";
+    var accentClass = options.accentClass || "";
+    if (!items || !items.length) {
+      return "<div class='report-empty-state'>" + emptyMessage + "</div>";
+    }
+    var max = items.reduce(function(best, item) {
+      return Math.max(best, Number(item.value || 0));
+    }, 0) || 1;
+    return items.map(function(item) {
+      var width = Math.max(8, Math.round((Number(item.value || 0) / max) * 100));
+      return "<div class='report-bar-row'>" +
+        "<div class='report-bar-text'>" +
+          "<span class='report-bar-label'>" + (item.label || "-") + "</span>" +
+          "<strong class='report-bar-value'>" + View.formatReportCount(item.value) + "</strong>" +
+        "</div>" +
+        "<div class='report-bar-track'>" +
+          "<span class='report-bar-fill " + accentClass + "' style='width:" + width + "%'></span>" +
+        "</div>" +
+      "</div>";
+    }).join("");
+  },
+
+  renderReportAnalytics: function() {
+    if (!this.getRecordViewConfig().showVerificationFilters) {
+      return;
+    }
+    var loadedRows = Array.isArray(Model.fullData) ? Model.fullData : [];
+    var activeRows = Array.isArray(Model.filteredData) ? Model.filteredData : [];
+    var totalLoaded = loadedRows.length;
+    var statusCounts = { verified: 0, deficiency: 0, unverified: 0 };
+    var heiCounts = {};
+    var assignedCounts = {};
+    var progressCounts = { withSO: 0, withDateReceived: 0, withDateForwarded: 0 };
+
+    activeRows.forEach(function(row) {
+      var category = Model.getVerificationCategory(row["Verification Status"]);
+      statusCounts[category] = (statusCounts[category] || 0) + 1;
+
+      var hei = String(row.HEI || "").trim() || "Unspecified HEI";
+      heiCounts[hei] = (heiCounts[hei] || 0) + 1;
+
+      var assigned = String(row["Issuance and Encoding of No.: Assigned Person"] || "").trim() || "Unassigned";
+      assignedCounts[assigned] = (assignedCounts[assigned] || 0) + 1;
+
+      if (String(row["SO No."] || "").trim()) progressCounts.withSO += 1;
+      if (String(row["Issuance and Encoding of No.: Date Received"] || "").trim()) progressCounts.withDateReceived += 1;
+      if (String(row["Issuance and Encoding of No.: Date Forwarded"] || "").trim()) progressCounts.withDateForwarded += 1;
+    });
+
+    var topEntries = function(map, limit) {
+      return Object.keys(map).map(function(key) {
+        return { label: key, value: map[key] };
+      }).sort(function(a, b) {
+        return b.value - a.value;
+      }).slice(0, limit || 5);
+    };
+
+    var datasetHint = this.getEl("reportDatasetHint");
+    if (datasetHint) {
+      datasetHint.textContent = "Showing " + this.formatReportCount(activeRows.length) + " of " + this.formatReportCount(totalLoaded) + " loaded students";
+    }
+
+    var setText = function(id, value) {
+      var el = View.getEl(id);
+      if (el) el.textContent = View.formatReportCount(value);
+    };
+    setText("reportTotalCount", totalLoaded);
+    setText("reportVerifiedCount", statusCounts.verified);
+    setText("reportDeficiencyCount", statusCounts.deficiency);
+    setText("reportUnverifiedCount", statusCounts.unverified);
+
+    var matchCount = this.getEl("reportMatchCount");
+    if (matchCount) {
+      matchCount.textContent = activeRows.length === totalLoaded
+        ? "All loaded rows"
+        : "Filtered result set";
+    }
+
+    var statusBars = this.getEl("reportStatusBars");
+    if (statusBars) {
+      statusBars.innerHTML = this.buildReportBarRows([
+        { label: "Verified", value: statusCounts.verified },
+        { label: "Deficiency", value: statusCounts.deficiency },
+        { label: "Unverified", value: statusCounts.unverified }
+      ], { accentClass: "report-bar-fill-status", emptyMessage: "No verification data yet" });
+    }
+
+    var heiBars = this.getEl("reportHeiBars");
+    if (heiBars) {
+      heiBars.innerHTML = this.buildReportBarRows(topEntries(heiCounts, 5), {
+        accentClass: "report-bar-fill-hei",
+        emptyMessage: "No HEI data available"
+      });
+    }
+
+    var assignedBars = this.getEl("reportAssignedBars");
+    if (assignedBars) {
+      assignedBars.innerHTML = this.buildReportBarRows(topEntries(assignedCounts, 5), {
+        accentClass: "report-bar-fill-assigned",
+        emptyMessage: "No assigned person data available"
+      });
+    }
+
+    var progressBars = this.getEl("reportProgressBars");
+    if (progressBars) {
+      progressBars.innerHTML = this.buildReportBarRows([
+        { label: "With SO Number", value: progressCounts.withSO },
+        { label: "With Date Received", value: progressCounts.withDateReceived },
+        { label: "With Date Forwarded", value: progressCounts.withDateForwarded }
+      ], { accentClass: "report-bar-fill-progress", emptyMessage: "No issuance progress data available" });
+    }
+  },
+
   setValue: function(id, value) {
     var el = this.getEl(id);
     if (!el) return;
     el.value = value || "";
+  },
+
+  getRecordViewConfig: function() {
+    return Model.recordViewConfig || {};
+  },
+
+  isDeveloperView: function() {
+    return this.getRecordViewConfig().mode === "developer";
+  },
+
+  applyRecordViewConfig: function() {
+    var config = this.getRecordViewConfig();
+    var headerRow = this.getEl("searchTableHeaderRow");
+    var filterBuilderMain = this.getEl("filterBuilderMain");
+    var navReportBtn = this.getEl("navReportBtn");
+    var navHistoryBtn = this.getEl("navHistoryBtn");
+    var reportView = this.getEl("reportView");
+    var historyView = this.getEl("historyView");
+    var homeView = this.getEl("homeView");
+
+    if (headerRow) {
+      var tableColumns = Array.isArray(config.tableColumns) ? config.tableColumns : [];
+      headerRow.innerHTML = tableColumns.map(function(column) {
+        return "<th>" + View.escapeHtml(column.label || column.name || "") + "</th>";
+      }).join("");
+    }
+
+    if (filterBuilderMain) {
+      filterBuilderMain.classList.toggle("d-none", !config.showVerificationFilters);
+    }
+    if (navReportBtn) navReportBtn.classList.toggle("d-none", !config.showVerificationFilters);
+    if (navHistoryBtn) navHistoryBtn.classList.toggle("d-none", !config.showVerificationFilters);
+    if (!config.showVerificationFilters) {
+      if (reportView) reportView.classList.add("d-none");
+      if (historyView) historyView.classList.add("d-none");
+      if (homeView) homeView.classList.remove("d-none");
+    }
+  },
+
+  escapeHtml: function(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  },
+
+  getFieldOperationBadgesHtml: function(field) {
+    var ops = (field && field.operations) || {};
+    var items = [
+      { key: "create", label: "C" },
+      { key: "read", label: "R" },
+      { key: "update", label: "U" },
+      { key: "delete", label: "D" }
+    ];
+    return items.map(function(item) {
+      var active = !!ops[item.key];
+      return "<span class='position-op-badge" + (active ? " is-active" : "") + "'>" + item.label + "</span>";
+    }).join("");
+  },
+
+  buildPlaceholderControlHtml: function(field) {
+    var type = String((field && field.type) || "").trim().toLowerCase();
+    var disabledAttr = " disabled";
+    var placeholder = " placeholder='No live data yet'";
+    if (type === "textarea") {
+      return "<textarea class='form-control' rows='2'" + disabledAttr + placeholder + "></textarea>";
+    }
+    if (type === "select" || type === "auto-populate-select" || type === "program-populate-select") {
+      var options = Array.isArray(field.selectOptions) ? field.selectOptions : [];
+      var optionHtml = "<option value=''>No live data yet</option>" + options.slice(0, 25).map(function(option) {
+        return "<option value='" + View.escapeHtml(option) + "'>" + View.escapeHtml(option) + "</option>";
+      }).join("");
+      return "<select class='form-control'" + disabledAttr + ">" + optionHtml + "</select>";
+    }
+    var inputType = "text";
+    if (type === "date" || type === "grad-date" || type === "from-date") inputType = "date";
+    if (type === "datetime") inputType = "datetime-local";
+    return "<input type='" + inputType + "' class='form-control'" + disabledAttr + placeholder + ">";
+  },
+
+  renderPositionFieldSchema: function() {
+    var container = this.getEl("positionFieldPlaceholderList");
+    var meta = this.getEl("positionFieldMeta");
+    if (!container) return;
+    var schema = Model.userPositionFieldSchema || {};
+    var fields = Array.isArray(schema.placeholderFields) ? schema.placeholderFields : [];
+
+    if (meta) {
+      if (schema.position || schema.profileId) {
+        meta.textContent = [schema.position || "No position", schema.profileId || "No profile"].join(" | ");
+      } else {
+        meta.textContent = "";
+      }
+    }
+
+    if (!schema.knownUser) {
+      container.innerHTML = "<div class='position-field-empty'>No matched user session yet. Check the browser console for account debug details.</div>";
+      return;
+    }
+    if (schema.denyReason && !fields.length) {
+      container.innerHTML = "<div class='position-field-empty'>" + this.escapeHtml(schema.denyReason) + "</div>";
+      return;
+    }
+    if (!fields.length) {
+      container.innerHTML = "<div class='position-field-empty'>No additional Data Types fields are mapped to your position yet.</div>";
+      return;
+    }
+
+    container.innerHTML = fields.map(function(field) {
+      var className = field.className ? "<div class='position-field-subline'>Class: " + View.escapeHtml(field.className) + "</div>" : "";
+      var stageLabel = field.stageLabel ? "<div class='position-field-subline'>Stage: " + View.escapeHtml(field.stageLabel) + "</div>" : "";
+      return "<div class='position-field-card'>" +
+        "<div class='position-field-header'>" +
+          "<div>" +
+            "<div class='position-field-title'>" + View.escapeHtml(field.name || "") + "</div>" +
+            "<div class='position-field-subtitle'>" + View.escapeHtml(field.type || "text") + "</div>" +
+          "</div>" +
+          "<div class='position-field-ops'>" + View.getFieldOperationBadgesHtml(field) + "</div>" +
+        "</div>" +
+        className +
+        stageLabel +
+        "<div class='position-field-control'>" + View.buildPlaceholderControlHtml(field) + "</div>" +
+      "</div>";
+    }).join("");
+  },
+
+  buildFieldValueControlHtml: function(field, value) {
+    var type = String((field && field.type) || "").trim().toLowerCase();
+    var safeValue = value == null ? "" : String(value);
+    if (type === "textarea") {
+      return "<textarea class='form-control' rows='2' disabled>" + View.escapeHtml(safeValue) + "</textarea>";
+    }
+    if (type === "select" || type === "auto-populate-select" || type === "program-populate-select") {
+      var options = Array.isArray(field.selectOptions) ? field.selectOptions : [];
+      var currentValue = safeValue;
+      var hasCurrent = options.some(function(option) { return String(option) === currentValue; });
+      var allOptions = hasCurrent || !currentValue ? options : [currentValue].concat(options);
+      return "<select class='form-control' disabled>" +
+        "<option value=''>" + View.escapeHtml(currentValue || "No value") + "</option>" +
+        allOptions.slice(0, 30).map(function(option) {
+          var selected = String(option) === currentValue ? " selected" : "";
+          return "<option value='" + View.escapeHtml(option) + "'" + selected + ">" + View.escapeHtml(option) + "</option>";
+        }).join("") +
+      "</select>";
+    }
+    var inputType = "text";
+    if (type === "date" || type === "grad-date" || type === "from-date") inputType = "date";
+    if (type === "datetime") inputType = "datetime-local";
+    return "<input type='" + inputType + "' class='form-control' value='" + View.escapeHtml(safeValue) + "' disabled>";
+  },
+
+  renderPositionRecordValues: function(student) {
+    var container = this.getEl("positionFieldPlaceholderList");
+    var meta = this.getEl("positionFieldMeta");
+    var description = this.getEl("positionFieldDescription");
+    if (!container) return;
+    var config = this.getRecordViewConfig();
+    var fields = Array.isArray(config.modalFields) ? config.modalFields : [];
+
+    if (meta) {
+      meta.textContent = [config.position || Model.accessContext.position || "No position", config.profileId || Model.accessContext.profileId || "No profile"].join(" | ");
+    }
+    if (description) {
+      description.textContent = "These fields are visible for your matched position and show the current database values.";
+    }
+    if (!fields.length) {
+      container.innerHTML = "<div class='position-field-empty'>No Data Types fields are visible for this position yet.</div>";
+      return;
+    }
+
+    container.innerHTML = fields.map(function(field) {
+      var value = student ? student[field.name] : "";
+      var className = field.className ? "<div class='position-field-subline'>Class: " + View.escapeHtml(field.className) + "</div>" : "";
+      return "<div class='position-field-card'>" +
+        "<div class='position-field-header'>" +
+          "<div>" +
+            "<div class='position-field-title'>" + View.escapeHtml(field.label || field.name || "") + "</div>" +
+            "<div class='position-field-subtitle'>" + View.escapeHtml(field.type || "text") + "</div>" +
+          "</div>" +
+          "<div class='position-field-ops'>" + View.getFieldOperationBadgesHtml(field) + "</div>" +
+        "</div>" +
+        className +
+        "<div class='position-field-control'>" + View.buildFieldValueControlHtml(field, value) + "</div>" +
+      "</div>";
+    }).join("");
+  },
+
+  setFieldInteractivity: function(id, enabled, readOnly) {
+    var el = this.getEl(id);
+    if (!el) return;
+    el.disabled = !enabled;
+    if (typeof readOnly === "boolean") el.readOnly = readOnly;
+  },
+
+  clearModalFieldError: function(fieldId, partnerId) {
+    var input = this.getEl(fieldId);
+    if (input) input.classList.remove("field-invalid");
+    var msg = this.getEl("error_" + fieldId);
+    if (msg) msg.textContent = "";
+    if (partnerId) {
+      var partner = this.getEl(partnerId);
+      if (partner) partner.classList.remove("field-invalid");
+    }
+  },
+
+  setModalFieldError: function(fieldId, message, partnerId) {
+    var input = this.getEl(fieldId);
+    if (input) input.classList.add("field-invalid");
+    var msg = this.getEl("error_" + fieldId);
+    if (msg) msg.textContent = message || "";
+    if (partnerId) {
+      var partner = this.getEl(partnerId);
+      if (partner) partner.classList.add("field-invalid");
+    }
+  },
+
+  clearModalActionError: function(actionId) {
+    var map = {
+      savebtn: "saveActionError",
+      updateStudentBtn: "updateActionError"
+    };
+    var el = this.getEl(map[actionId] || actionId);
+    if (el) el.textContent = "";
+  },
+
+  setModalActionError: function(actionId, message) {
+    var map = {
+      savebtn: "saveActionError",
+      updateStudentBtn: "updateActionError"
+    };
+    var el = this.getEl(map[actionId] || actionId);
+    if (el) el.textContent = message || "";
+  },
+
+  clearModalValidationErrors: function() {
+    [
+      "issuance_date_received",
+      "issuance_date_accomplished",
+      "issuance_status",
+      "issuance_remarks",
+      "issuance_date_forwarded",
+      "so_prefix",
+      "so_number",
+      "edit_series",
+      "edit_date_so_issuance"
+    ].forEach(function(id) {
+      View.clearModalFieldError(id);
+    });
+    this.clearModalFieldError("so_prefix", "so_number");
+    this.clearModalActionError("savebtn");
+    this.clearModalActionError("updateStudentBtn");
+  },
+
+  openSoChangeConfirmModal: function(message) {
+    var modal = this.getEl("soChangeConfirmModal");
+    var body = this.getEl("soChangeConfirmMessage");
+    if (body) body.textContent = message || "";
+    if (modal) modal.classList.add("show");
+  },
+
+  closeSoChangeConfirmModal: function() {
+    var modal = this.getEl("soChangeConfirmModal");
+    if (modal) modal.classList.remove("show");
+  },
+
+  openStatusEditConfirmModal: function(message) {
+    var modal = this.getEl("statusEditConfirmModal");
+    var body = this.getEl("statusEditConfirmMessage");
+    if (body) body.textContent = message || "";
+    if (modal) modal.classList.add("show");
+  },
+
+  closeStatusEditConfirmModal: function() {
+    var modal = this.getEl("statusEditConfirmModal");
+    if (modal) modal.classList.remove("show");
   },
 
   populateSeriesDropdown: function(selectedValue) {
@@ -62,8 +504,10 @@ var View = {
     var end = start + Model.rowsPerPage;
     var rows = Model.filteredData.slice(start, end);
     var tbody = this.getEl("searchResults");
+    var mobileContainer = this.getEl("searchResultsMobile");
     if (!tbody) return;
     tbody.innerHTML = "";
+    if (mobileContainer) mobileContainer.innerHTML = "";
 
     if (!rows.length) {
       this.renderEmpty("No records found");
@@ -73,6 +517,46 @@ var View = {
     var cell = function(value) {
       return "<div class='cell-wrap'>" + (value || "") + "</div>";
     };
+
+    var config = this.getRecordViewConfig();
+    var tableColumns = Array.isArray(config.tableColumns) ? config.tableColumns : [];
+
+    if (!this.isDeveloperView()) {
+      rows.forEach(function(r) {
+        var tr = document.createElement("tr");
+        tr.dataset.row = r._row;
+        tr.innerHTML = tableColumns.map(function(column) {
+          return "<td>" + cell(View.escapeHtml(r[column.name] || "")) + "</td>";
+        }).join("");
+        tr.classList.add("show");
+        tbody.appendChild(tr);
+
+        if (mobileContainer) {
+          var extraColumns = tableColumns.filter(function(column) { return !column.isIdentity; }).slice(0, 4);
+          var card = document.createElement("button");
+          card.type = "button";
+          card.className = "search-result-card";
+          card.dataset.row = r._row;
+          card.innerHTML =
+            "<div class='search-result-card-top'>" +
+              "<div class='search-result-name'>" + View.escapeHtml(r["Name of the Student"] || "") + "</div>" +
+              "<div class='search-result-id'>ID " + View.escapeHtml(r.ID || "-") + "</div>" +
+            "</div>" +
+            "<div class='search-result-hey'>" + View.escapeHtml(r.HEI || "-") + "</div>" +
+            "<div class='search-result-meta-grid'>" +
+              extraColumns.map(function(column) {
+                return "<div><span>" + View.escapeHtml(column.label || column.name || "") + "</span><strong>" + View.escapeHtml(r[column.name] || "-") + "</strong></div>";
+              }).join("") +
+            "</div>";
+          mobileContainer.appendChild(card);
+        }
+      });
+
+      this.renderPagination();
+      this.updateStatusText();
+      this.renderReportAnalytics();
+      return;
+    }
 
     rows.forEach(function(r) {
       var hasSO = !!String(r["SO No."] || "").trim();
@@ -88,16 +572,47 @@ var View = {
                      "<td>" + cell(r["Issuance and Encoding of No.: Assigned Person"] || "") + "</td>";
       tr.classList.add("show");
       tbody.appendChild(tr);
+
+      if (mobileContainer) {
+        var card = document.createElement("button");
+        card.type = "button";
+        card.className = "search-result-card";
+        card.dataset.row = r._row;
+        card.innerHTML =
+          "<div class='search-result-card-top'>" +
+            "<div class='search-result-name'>" + (r["Name of the Student"] || "") + (hasSO ? View.soIndicatorHtml() : "") + "</div>" +
+            "<div class='search-result-id'>ID " + (r.ID || "-") + "</div>" +
+          "</div>" +
+          "<div class='search-result-hey'>" + (r.HEI || "-") + "</div>" +
+          "<div class='search-result-status-row'>" +
+            View.statusBadgeHtml(r["Verification Status"]) +
+            "<span class='search-result-assigned'>" + (r["Issuance and Encoding of No.: Assigned Person"] || "Unassigned") + "</span>" +
+          "</div>" +
+          "<div class='search-result-meta-grid'>" +
+            "<div><span>Received</span><strong>" + (r["Verification: Date Received"] || "-") + "</strong></div>" +
+            "<div><span>Accomplished</span><strong>" + (r["Verification: Date Accomplished"] || "-") + "</strong></div>" +
+            "<div><span>Forwarded</span><strong>" + (r["Verification: Date Forwarded"] || "-") + "</strong></div>" +
+          "</div>";
+        mobileContainer.appendChild(card);
+      }
     });
 
     this.renderPagination();
     this.updateStatusText();
+    this.renderReportAnalytics();
   },
 
   renderEmpty: function(message) {
     var tbody = this.getEl("searchResults");
+    var mobileContainer = this.getEl("searchResultsMobile");
     if (!tbody) return;
-    tbody.innerHTML = "<tr><td colspan='8' class='text-center py-4'>" + message + "</td></tr>";
+    var config = this.getRecordViewConfig();
+    var colspan = Math.max(1, Array.isArray(config.tableColumns) ? config.tableColumns.length : 8);
+    tbody.innerHTML = "<tr><td colspan='" + colspan + "' class='text-center py-4'>" + message + "</td></tr>";
+    if (mobileContainer) {
+      mobileContainer.innerHTML = "<div class='search-results-empty'>" + message + "</div>";
+    }
+    this.renderReportAnalytics();
   },
 
   renderPagination: function() {
@@ -164,10 +679,14 @@ var View = {
 
   showMainSearchLoading: function() {
     var tbody = this.getEl("searchResults");
+    var mobileContainer = this.getEl("searchResultsMobile");
     if (!tbody) return;
     tbody.innerHTML = "<tr><td colspan='8' class='text-center py-4'>" +
       "<span class='inline-table-loader'><span class='spinner-border spinner-border-sm' role='status'></span><span>Searching...</span></span>" +
       "</td></tr>";
+    if (mobileContainer) {
+      mobileContainer.innerHTML = "<div class='search-results-empty'><span class='inline-table-loader'><span class='spinner-border spinner-border-sm' role='status'></span><span>Searching...</span></span></div>";
+    }
   },
 
   showSaveIndicator: function(message, type, autoHideMs) {
@@ -182,6 +701,18 @@ var View = {
     if (autoHideMs && autoHideMs > 0) {
       setTimeout(function() { el.classList.remove("show"); }, autoHideMs);
     }
+  },
+
+  setSaveButtonLoading: function(isLoading) {
+    var btn = this.getEl("savebtn");
+    if (!btn) return;
+    if (!btn.dataset.defaultHtml) btn.dataset.defaultHtml = btn.innerHTML;
+    if (isLoading) {
+      btn.disabled = true;
+      btn.innerHTML = "<span class='spinner-border spinner-border-sm me-2' role='status' aria-hidden='true'></span>Saving...";
+      return;
+    }
+    btn.innerHTML = btn.dataset.defaultHtml || "<i class='bi bi-save'></i> Save";
   },
 
   renderSoPrefixOptions: function(prefixes) {
@@ -214,7 +745,7 @@ var View = {
 
       var tdName = document.createElement("td");
       tdName.innerHTML = "<strong>" + (student["Name of the Student"] || "") + "</strong>" +
-        (restricted ? "<div class='batch-lock-detail' title='" + restriction + "'><i class='bi bi-lock-fill'></i>" + restriction + "</div>" : "");
+        "<div class='mt-1'>" + View.statusBadgeHtml(student["Verification Status"]) + "</div>";
 
       var tdAction = document.createElement("td");
       var addBtn = document.createElement("button");
@@ -222,9 +753,11 @@ var View = {
       addBtn.className = "icon-action-btn" + (restricted ? " locked" : "");
       addBtn.title = restricted ? restriction : "Add to batch";
       addBtn.innerHTML = restricted ? "<i class='bi bi-lock'></i>" : "<i class='bi bi-plus-lg'></i>";
-      addBtn.disabled = restricted;
+      addBtn.setAttribute("aria-disabled", restricted ? "true" : "false");
+      if (restricted) addBtn.style.cursor = "not-allowed";
       addBtn.onclick = function(e) {
         e.stopPropagation();
+        if (restricted) return;
         Controller.addBatchStudent(student._row);
       };
       tdAction.appendChild(addBtn);
@@ -244,16 +777,6 @@ var View = {
     container.innerHTML = "<tr><td colspan='2' class='text-center py-3'>" +
       "<span class='inline-table-loader'><span class='spinner-border spinner-border-sm' role='status'></span><span>Loading...</span></span>" +
       "</td></tr>";
-  },
-
-  openHistoryModal: function() {
-    var modal = this.getEl("historyModal");
-    if (modal) modal.classList.add("show");
-  },
-
-  closeHistoryModal: function() {
-    var modal = this.getEl("historyModal");
-    if (modal) modal.classList.remove("show");
   },
 
   renderHistoryMeta: function(student) {
@@ -299,6 +822,79 @@ var View = {
         "<td>" + (r.series || "-") + "</td>" +
         "<td>" + (r.dateSOIssuance || "-") + "</td>" +
         "<td>" + (r.dateSaved || "-") + "</td>";
+      tbody.appendChild(tr);
+    });
+  },
+
+  renderSaveFailureMeta: function(summary) {
+    var el = this.getEl("historyFailureMeta");
+    if (!el) return;
+    el.textContent = summary || "Showing failed save attempts";
+  },
+
+  showSaveFailureLoading: function() {
+    var tbody = this.getEl("historyFailureResults");
+    if (!tbody) return;
+    tbody.innerHTML = "<tr><td colspan='9' class='text-center py-4'>" +
+      "<span class='inline-table-loader'><span class='spinner-border spinner-border-sm' role='status'></span><span>Loading failed saves...</span></span>" +
+      "</td></tr>";
+  },
+
+  setRetryFailureButtonLoading: function(logRow, localKey, isLoading) {
+    var tbody = this.getEl("historyFailureResults");
+    if (!tbody) return;
+
+    var selector = ".retry-failure-btn";
+    if (logRow) {
+      selector += "[data-log-row='" + String(logRow) + "']";
+    } else if (localKey) {
+      selector += "[data-local-key='" + String(localKey) + "']";
+    } else {
+      return;
+    }
+
+    var btn = tbody.querySelector(selector);
+    if (!btn) return;
+
+    if (isLoading) {
+      btn.disabled = true;
+      btn.dataset.originalHtml = btn.innerHTML;
+      btn.innerHTML = "<span class='spinner-border spinner-border-sm me-1' role='status' aria-hidden='true'></span>Retrying...";
+      btn.classList.add("is-loading");
+      return;
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = btn.dataset.originalHtml || "Retry Save";
+    btn.classList.remove("is-loading");
+    delete btn.dataset.originalHtml;
+  },
+
+  renderSaveFailureRows: function(rows) {
+    var tbody = this.getEl("historyFailureResults");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    if (!rows || !rows.length) {
+      tbody.innerHTML = "<tr><td colspan='9' class='text-center text-muted py-3'>No failed saves found</td></tr>";
+      return;
+    }
+
+    rows.forEach(function(r) {
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + (r.name || "-") + "<div class='small text-muted'>ID: " + (r.id || "-") + "</div></td>" +
+        "<td>" + (r.row || "-") + "</td>" +
+        "<td><div class='history-failure-message'>" + (r.message || "-") + "</div></td>" +
+        "<td><code>" + (r.code || "-") + "</code></td>" +
+        "<td><code>" + (r.debugId || "-") + "</code></td>" +
+        "<td><span class='history-failure-status status-" + String(r.status || "failed").replace(/[^a-z-]/gi, "").toLowerCase() + "'>" + (r.status || "failed") + "</span></td>" +
+        "<td>" + (r.retryResult || "-") + (r.retryDebugId ? "<div class='small text-muted'><code>" + r.retryDebugId + "</code></div>" : "") + "</td>" +
+        "<td>" + (r.dateSaved || "-") + "</td>" +
+        "<td>" + (
+          r.status === "retried-success"
+            ? "<span class='text-success small fw-semibold'>Resolved</span>"
+            : "<button type='button' class='btn btn-sm btn-outline-primary retry-failure-btn' data-log-row='" + (r.logRow || "") + "' data-local-key='" + (r.localKey || "") + "'>Retry Save</button>"
+        ) + "</td>";
       tbody.appendChild(tr);
     });
   },
@@ -364,17 +960,19 @@ var View = {
   updateActionButtons: function() {
     var saveBtn = this.getEl("savebtn");
     var updateBtn = this.getEl("updateStudentBtn");
+    var canEditRecord = !!(Model.currentRecordPermissions && Model.currentRecordPermissions.canEditRecord);
     if (saveBtn) {
-      saveBtn.disabled = !(Model.batchHasChanges && Model.batchConfirmed);
+      saveBtn.disabled = Model.isSavingBatch || !canEditRecord || !(Model.batchHasChanges && Model.batchConfirmed);
     }
     if (updateBtn) {
-      updateBtn.disabled = !Model.batchStudents.length;
+      updateBtn.disabled = Model.isSavingBatch || !canEditRecord || !Model.batchStudents.length;
     }
   },
 
   populateEditForm: function(entry) {
     if (!entry) return;
     Model.setEditingRow(entry._row);
+    this.clearModalValidationErrors();
     this.populateSeriesDropdown(entry.fields.series);
 
     var firstNoSO = Model.getFirstWithoutSOEntry();
@@ -396,28 +994,45 @@ var View = {
     this.setValue("so_number", entry.fields.soNumber);
     this.setValue("edit_date_so_issuance", entry.fields.dateSOIssuance);
     this.setValue("edit_series", entry.fields.series);
-
-    ["issuance_date_received", "issuance_date_accomplished", "edit_date_so_issuance"].forEach(function(id) {
-      var el = View.getEl(id);
-      if (el) el.readOnly = false;
-    });
-
-    var lockSo = entry.hasExistingSO;
-    var soPrefix = this.getEl("so_prefix");
-    var soNumber = this.getEl("so_number");
-    if (soPrefix) soPrefix.readOnly = lockSo;
-    if (soNumber) soNumber.readOnly = lockSo;
   },
 
   openEditModal: function(student) {
     if (!student) return;
     Model.setLastFocusedStudent(student._row);
+    if (!this.isDeveloperView()) {
+      Model.clearEditing();
+      Model.setEditingRow(student._row);
+      Model.currentRecordPermissions = { canEditRecord: false, editableFieldKeys: [], readOnlyFieldKeys: [], denyReason: "" };
+      this.clearModalValidationErrors();
+      var summary = this.getEl("studentSummary");
+      if (summary) {
+        summary.innerHTML = "<b>" + (student["Name of the Student"] || "") + "</b><br>ID: " + (student.ID || "") + "<br>HEI: " + (student.HEI || "");
+      }
+      this.renderPositionRecordValues(student);
+      this.applyRolePermissions();
+      this.updateActionButtons();
+      var readOnlyModal = this.getEl("editModal");
+      if (readOnlyModal) readOnlyModal.classList.add("show");
+      return;
+    }
     var entry = Model.normalizeStudentToBatchEntry(student);
+    if (!entry.hasExistingSO) {
+      entry.previewSO = "";
+      entry.fields.soNo = "";
+      entry.fields.soPrefix = "";
+      entry.fields.soNumber = "";
+      entry.originalPreviewSO = "";
+      entry.originalFields.soNo = "";
+      entry.originalFields.soPrefix = "";
+      entry.originalFields.soNumber = "";
+    }
     Model.setBatchStudents([entry]);
-    Model.recomputeBatchSoPreviews();
+    Model.currentRecordPermissions = Model.evaluateRecordPermissions(student);
     this.populateEditForm(entry);
     this.renderSelectedBatchList();
     this.renderBatchSearchResults([], false);
+    this.renderPositionFieldSchema();
+    this.applyRolePermissions();
     this.updateActionButtons();
     var modal = this.getEl("editModal");
     if (modal) modal.classList.add("show");
@@ -428,14 +1043,72 @@ var View = {
   closeEditModal: function() {
     var modal = this.getEl("editModal");
     if (modal) modal.classList.remove("show");
+    this.clearModalValidationErrors();
     Model.clearEditing();
     var batchSearchInput = this.getEl("batchSearchInput");
     if (batchSearchInput) batchSearchInput.value = "";
     var panel = this.getEl("batchPanel");
     if (panel) panel.classList.remove("show-panel");
+    this.closeSoChangeConfirmModal();
+    this.closeStatusEditConfirmModal();
     this.renderBatchSearchResults([], false);
     this.renderSelectedBatchList();
+    this.renderPositionFieldSchema();
+    this.applyRolePermissions();
     this.updateActionButtons();
+  },
+
+  applyRolePermissions: function() {
+    var issuanceSection = this.getEl("developerIssuanceSection");
+    var batchPanel = this.getEl("batchPanel");
+    var saveBtn = this.getEl("savebtn");
+    var updateBtn = this.getEl("updateStudentBtn");
+    var description = this.getEl("positionFieldDescription");
+    if (!this.isDeveloperView()) {
+      if (issuanceSection) issuanceSection.classList.add("d-none");
+      if (batchPanel) batchPanel.classList.add("d-none");
+      if (saveBtn) saveBtn.classList.add("d-none");
+      if (updateBtn) updateBtn.classList.add("d-none");
+      if (description) {
+        description.textContent = "These fields are visible for your matched position and show the current database values.";
+      }
+      this.clearModalActionError("updateStudentBtn");
+      this.clearModalActionError("savebtn");
+      return;
+    }
+    if (issuanceSection) issuanceSection.classList.remove("d-none");
+    if (batchPanel) batchPanel.classList.remove("d-none");
+    if (saveBtn) saveBtn.classList.remove("d-none");
+    if (updateBtn) updateBtn.classList.remove("d-none");
+    if (description) {
+      description.textContent = "These fields come from Data Types for your matched position. Only the current Issuance fields above are bound to live record data for now.";
+    }
+    var access = Model.accessContext || {};
+    var permissions = Model.currentRecordPermissions || {};
+    var editable = Array.isArray(permissions.editableFieldKeys) ? permissions.editableFieldKeys : [];
+    var canEditRecord = !!permissions.canEditRecord;
+    var canUpdateAny = !!access.canUpdateAny;
+
+    this.setFieldInteractivity("batchSearchInput", canUpdateAny, false);
+    this.setFieldInteractivity("batchSearchClearBtn", canUpdateAny, false);
+
+    this.setFieldInteractivity("issuance_date_received", canEditRecord && editable.indexOf("dateReceived") !== -1, false);
+    this.setFieldInteractivity("issuance_date_accomplished", canEditRecord && editable.indexOf("dateAccomplished") !== -1, false);
+    this.setFieldInteractivity("issuance_status", canEditRecord && editable.indexOf("status") !== -1, false);
+    this.setFieldInteractivity("issuance_remarks", canEditRecord && editable.indexOf("remarks") !== -1, false);
+    this.setFieldInteractivity("issuance_date_forwarded", canEditRecord && editable.indexOf("dateForwarded") !== -1, false);
+    this.setFieldInteractivity("so_prefix", canEditRecord && editable.indexOf("soNo") !== -1, false);
+    this.setFieldInteractivity("so_number", canEditRecord && editable.indexOf("soNo") !== -1, false);
+    this.setFieldInteractivity("edit_series", canEditRecord && editable.indexOf("series") !== -1, false);
+    this.setFieldInteractivity("edit_date_so_issuance", canEditRecord && editable.indexOf("dateSOIssuance") !== -1, false);
+
+    if (!canEditRecord && permissions.denyReason) {
+      this.setModalActionError("updateStudentBtn", permissions.denyReason);
+      this.setModalActionError("savebtn", permissions.denyReason);
+    } else {
+      this.clearModalActionError("updateStudentBtn");
+      this.clearModalActionError("savebtn");
+    }
   }
 };
 </script>

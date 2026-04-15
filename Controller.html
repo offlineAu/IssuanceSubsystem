@@ -39,6 +39,128 @@ var Controller = {
   pendingSaveTargets: null,
   pendingStatusEditStudent: null,
   pendingStatusAction: null,
+  
+  getCurrentModuleRequestId: function() {
+    return Number((Model.executionLock && Model.executionLock.requestId) || 0);
+  },
+
+  validateModuleExecution: function(module, requestId) {
+    var activeModule = String((Model.executionLock && Model.executionLock.activeModule) || "");
+    var activeRequestId = Number((Model.executionLock && Model.executionLock.requestId) || 0);
+    var valid = activeModule === String(module || "") && activeRequestId === Number(requestId || 0);
+    if (!valid) {
+      console.log("[EXECUTION BLOCKED] stale response for module " + String(module || ""));
+    }
+    return valid;
+  },
+
+  guardModuleCallback: function(module, requestId, callback) {
+    return function() {
+      if (!Controller.validateModuleExecution(module, requestId)) return;
+      return callback.apply(null, arguments);
+    };
+  },
+
+  enterModule: function(module) {
+    Model.executionLock.activeModule = String(module || "");
+    Model.executionLock.requestId = Number((Model.executionLock && Model.executionLock.requestId) || 0) + 1;
+    console.log("[EXECUTION ENTER] " + Model.executionLock.activeModule);
+    return Model.executionLock.requestId;
+  },
+
+  exitModule: function(module) {
+    console.log("[EXECUTION EXIT] " + String(module || ""));
+    Model.executionLock.requestId = Number((Model.executionLock && Model.executionLock.requestId) || 0) + 1;
+    if (!module || String((Model.executionLock && Model.executionLock.activeModule) || "") === String(module)) {
+      Model.executionLock.activeModule = null;
+    }
+    if (String(module || "") === "issuance" && Model.databaseRowPollingTimer) {
+      clearInterval(Model.databaseRowPollingTimer);
+      Model.databaseRowPollingTimer = null;
+    }
+  },
+
+  resolveInitialModule: function(modules) {
+    if (!modules || !modules.length) return null;
+    if (modules.indexOf("issuance") !== -1) return "issuance";
+    if (modules.indexOf("typing") !== -1) return "typing";
+    if (modules.indexOf("dashboard") !== -1) return "dashboard";
+    return modules[0];
+  },
+
+  updateModuleIndicator: function() {
+    var moduleEl = document.getElementById("currentModuleIndicator");
+    var noModuleEl = document.getElementById("noModuleAssignedMessage");
+    var activeModule = Model.activeModule;
+    var labelMap = {
+      issuance: "Current Module: Issuance",
+      typing: "Current Module: Typing Records",
+      dashboard: "Current Module: Executive Dashboard (ES II)"
+    };
+    if (moduleEl) {
+      moduleEl.textContent = labelMap[activeModule] || "Current Module: -";
+    }
+    if (noModuleEl) {
+      noModuleEl.classList.toggle("d-none", !!activeModule);
+    }
+    View.renderModuleState();
+    if (activeModule === "typing") {
+      View.renderTypingModule();
+    } else if (activeModule === "dashboard") {
+      View.renderDashboardModule(Model.dashboard.data);
+    }
+  },
+
+  isUnhandledIssuanceRouteResult: function(result) {
+    return !result || (typeof result === "object" && (
+      result.handled === false ||
+      result.status === "NOT_IMPLEMENTED" ||
+      result.status === "INVALID_MODULE" ||
+      result.status === "UNKNOWN_ACTION"
+    ));
+  },
+
+  normalizeIssuanceExecutionResult: function(action, result, source) {
+    var raw = result;
+    var data = raw;
+    var success = true;
+    if (raw && typeof raw === "object" && Object.prototype.hasOwnProperty.call(raw, "handled")) {
+      success = !!raw.handled && String(raw.status || "") === "SUCCESS";
+      data = Object.prototype.hasOwnProperty.call(raw, "data") ? raw.data : raw;
+    } else if (raw && typeof raw === "object" && Object.prototype.hasOwnProperty.call(raw, "ok")) {
+      success = !!raw.ok;
+      data = raw;
+    } else if (raw && typeof raw === "object" && Object.prototype.hasOwnProperty.call(raw, "status")) {
+      success = String(raw.status || "").toUpperCase() === "SUCCESS";
+      data = raw;
+    }
+    return {
+      success: !!success,
+      data: data,
+      source: source === "legacy" ? "legacy" : "route",
+      action: String(action || "")
+    };
+  },
+
+  tryIssuanceRoute: function(action, payload, onSuccess, onFailure, fallbackInvoker) {
+    if (typeof fallbackInvoker !== "function") {
+      fallbackInvoker = onFailure;
+      onFailure = null;
+    }
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (Controller.isUnhandledIssuanceRouteResult(result)) {
+          fallbackInvoker();
+          return;
+        }
+        var normalized = Controller.normalizeIssuanceExecutionResult(action, result, "route");
+        onSuccess(normalized.data);
+      })
+      .withFailureHandler(function() {
+        fallbackInvoker();
+      })
+      .routeModule("issuance", action, payload || {});
+  },
 
   setActiveMainView: function(viewName) {
     var nextView = viewName === "report" ? "report" : (viewName === "history" ? "history" : "home");
@@ -59,13 +181,199 @@ var Controller = {
     this.loadSoPrefixes();
     View.populateSeriesDropdown(String(new Date().getFullYear()));
     this.setActiveMainView("home");
-    this.initData();
-    this.startDatabaseRowPolling();
+    this.updateModuleIndicator();
+    Service.getUserModuleAccess().then(function(result) {
+      Model.userContext = result || Model.userContext;
+      Model.activeModule = Controller.resolveInitialModule((result && result.modules) || []);
+      Controller.updateModuleIndicator();
+      if (Model.activeModule === "issuance") {
+        Controller.initData();
+        Controller.startDatabaseRowPolling();
+      } else if (Model.activeModule === "typing") {
+        Controller.initTypingModule();
+        Controller.initData();
+      } else if (Model.activeModule === "dashboard") {
+        Controller.initDashboardModule();
+      } else {
+        console.log("[MODULE LOADER] Active module: " + (Model.activeModule || "none"));
+      }
+    }).catch(function(error) {
+      Model.userContext = { email: null, position: null, access: "", modules: [] };
+      Model.activeModule = null;
+      Controller.updateModuleIndicator();
+      console.log("[MODULE LOADER] Failed to load module access");
+      console.log(error);
+    });
+  },
+
+  initDashboardModule: function() {
+    this.exitModule((Model.executionLock && Model.executionLock.activeModule) || null);
+    var requestId = this.enterModule("dashboard");
+    console.log("[MODULE DASHBOARD] initDashboardModule called");
+    Model.safeSet("dashboard", "dashboard", { data: null, isLoading: true });
+    View.renderDashboardModule(null);
+    Service.getDashboardData({}).then(this.guardModuleCallback("dashboard", requestId, function(result) {
+      Model.safeSet("dashboard", "dashboard", { data: result || null, isLoading: false });
+      console.log("[MODULE DASHBOARD] data loaded");
+      View.renderDashboardModule(Model.dashboard.data);
+    })).catch(this.guardModuleCallback("dashboard", requestId, function(error) {
+      Model.safeSet("dashboard", "dashboard", {
+        data: { error: error && error.message ? error.message : "Unable to load dashboard data." },
+        isLoading: false
+      });
+      console.log("[MODULE DASHBOARD] data loaded");
+      View.renderDashboardModule(Model.dashboard.data);
+    }));
+  },
+
+  initTypingModule: function() {
+    this.exitModule((Model.executionLock && Model.executionLock.activeModule) || null);
+    this.enterModule("typing");
+    console.log("[TYPING MODULE] Initialized");
+    Model.typing.batchId = "batch_" + Date.now();
+    Model.typing.students = [];
+    Model.typing.isSaving = false;
+    Model.typing.progress = {
+      total: 0,
+      saved: 0,
+      failed: 0
+    };
+    View.renderTypingModule();
+  },
+
+  normalizeTypingDateInput: function(value) {
+    return String(value || "").trim();
+  },
+
+  normalizeTypingNameInput: function(value) {
+    return String(value || "").trim().toUpperCase();
+  },
+
+  getTypingStudentFromForm: function() {
+    return {
+      dateReceived: this.normalizeTypingDateInput((document.getElementById("temp_date_received") || {}).value || ""),
+      studentName: this.normalizeTypingNameInput((document.getElementById("temp_student_name") || {}).value || ""),
+      hei: ((document.getElementById("temp_hei") || {}).value || "").trim(),
+      dateOfGraduation: this.normalizeTypingDateInput((document.getElementById("temp_date_graduation") || {}).value || ""),
+      program: ((document.getElementById("temp_program") || {}).value || "").trim()
+    };
+  },
+
+  resetTypingForm: function() {
+    ["temp_date_received", "temp_student_name", "temp_hei", "temp_date_graduation", "temp_program"].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.value = "";
+    });
+  },
+
+  openTypingBatchModal: function() {
+    Model.typing.batchId = Model.typing.batchId || ("batch_" + Date.now());
+    Model.typing.students = Array.isArray(Model.typing.students) ? Model.typing.students : [];
+    this.resetTypingForm();
+    View.clearTypingValidationErrors();
+    View.renderTypingModule();
+    View.openTypingEditModal();
+  },
+
+  addManualBatchStudent: function() {
+    View.clearTypingValidationErrors();
+    var normalized = this.getTypingStudentFromForm();
+    View.setValue("temp_date_received", normalized.dateReceived);
+    View.setValue("temp_student_name", normalized.studentName);
+    View.setValue("temp_date_graduation", normalized.dateOfGraduation);
+
+    if (!normalized.dateReceived) {
+      View.setModalFieldError("temp_date_received", "Date Received is required.");
+      return;
+    }
+    if (!normalized.studentName) {
+      View.setModalFieldError("temp_student_name", "Name of the Student is required.");
+      return;
+    }
+    if (!normalized.hei) {
+      View.setModalFieldError("temp_hei", "HEI is required.");
+      return;
+    }
+    if (!normalized.dateOfGraduation) {
+      View.setModalFieldError("temp_date_graduation", "Date of Graduation is required.");
+      return;
+    }
+    if (!normalized.program) {
+      View.setModalFieldError("temp_program", "Program is required.");
+      return;
+    }
+
+    Model.typing.students.push(normalized);
+    this.resetTypingForm();
+    View.renderTypingModule();
+  },
+
+  removeTypingStudent: function(index) {
+    if (!Array.isArray(Model.typing.students)) return;
+    if (index < 0 || index >= Model.typing.students.length) return;
+    Model.typing.students.splice(index, 1);
+    View.renderTypingModule();
+    if (!Model.typing.students.length) {
+      View.closeTypingEditModal();
+    }
+  },
+
+  saveTypingBatch: async function() {
+    var requestId = this.getCurrentModuleRequestId();
+    var students = Array.isArray(Model.typing.students) ? Model.typing.students : [];
+    if (!students.length) {
+      console.log("[TYPING MODULE] No students to save");
+      return;
+    }
+
+    Model.typing.isSaving = true;
+    Model.typing.progress = {
+      total: students.length,
+      saved: 0,
+      failed: 0
+    };
+    View.renderTypingModule();
+
+    try {
+      var result = await Service.createTypingBatch({
+        batchId: Model.typing.batchId,
+        students: students
+      });
+      if (!this.validateModuleExecution("typing", requestId)) return;
+      var data = (result && result.data) || {};
+      Model.typing.progress = {
+        total: students.length,
+        saved: Number(data.inserted || 0),
+        failed: Number(data.failed || 0)
+      };
+
+      if (result && result.status === "SUCCESS") {
+        Model.typing.batchId = "batch_" + Date.now();
+        Model.typing.students = [];
+        View.closeTypingEditModal();
+        Controller.initData();
+      }
+    } catch (error) {
+      if (!this.validateModuleExecution("typing", requestId)) return;
+      Model.typing.progress = {
+        total: students.length,
+        saved: 0,
+        failed: students.length
+      };
+      console.log("[TYPING MODULE] Save failed");
+      console.log(error);
+    } finally {
+      Model.typing.isSaving = false;
+      View.renderTypingModule();
+    }
   },
 
   initData: function() {
+    var targetModule = Model.activeModule === "typing" ? "typing" : "issuance";
+    this.exitModule((Model.executionLock && Model.executionLock.activeModule) || null);
+    var requestId = this.enterModule(targetModule);
     View.showOverlay(true);
-    Service.getInitialData(Model.initialBatchSize, function(res){
+    this.tryIssuanceRoute("fetch", { batchSize: Model.initialBatchSize }, this.guardModuleCallback(targetModule, requestId, function(res) {
       Model.recordViewConfig = res.viewConfig || Model.recordViewConfig;
       View.applyRecordViewConfig();
       Model.fullData = res.data;
@@ -77,12 +385,30 @@ var Controller = {
       Model.loadingBatches = true;
       Model.nextBatchStart = 2 + Model.fullData.length;
       Controller.loadNextBatch(Model.nextBatchStart);
+    }), function() {
+      Service.getInitialData(Model.initialBatchSize, Controller.guardModuleCallback(targetModule, requestId, function(res){
+        var normalized = Controller.normalizeIssuanceExecutionResult("fetch", res, "legacy");
+        var data = normalized.data || {};
+        Model.recordViewConfig = data.viewConfig || Model.recordViewConfig;
+        View.applyRecordViewConfig();
+        Model.fullData = data.data;
+        Model.totalRows = data.total;
+        Model.filteredData = Model.applyMainViewFilters(Model.fullData);
+        Controller.renderPage(1);
+        View.showOverlay(false);
+
+        Model.loadingBatches = true;
+        Model.nextBatchStart = 2 + Model.fullData.length;
+        Controller.loadNextBatch(Model.nextBatchStart);
+      }));
     });
   },
 
   loadNextBatch: function(startRow) {
+    var targetModule = Model.activeModule === "typing" ? "typing" : "issuance";
+    var requestId = this.getCurrentModuleRequestId();
     if (!Model.loadingBatches || startRow > (Model.totalRows + 1)) return;
-    Service.loadRemainingData(startRow, Model.nextBatchSize, function(res){
+    Service.loadRemainingData(startRow, Model.nextBatchSize, this.guardModuleCallback(targetModule, requestId, function(res){
       if (res.data && res.data.length) {
         var existingRows = {};
         Model.fullData.forEach(function(f){ existingRows[String(f._row)] = true; });
@@ -103,7 +429,7 @@ var Controller = {
       } else {
         Model.loadingBatches = false;
       }
-    });
+    }));
   },
 
   renderPage: function(page) {
@@ -130,6 +456,8 @@ var Controller = {
   },
 
   doSearch: function(term) {
+    var targetModule = Model.activeModule === "typing" ? "typing" : "issuance";
+    var requestId = this.getCurrentModuleRequestId();
     var token = ++Model.activeSearchToken;
     term = (term || "").trim().toLowerCase();
     Model.lastMainSearchTerm = term;
@@ -160,7 +488,7 @@ var Controller = {
 
       Model.isSearchingMain = true;
       View.showMainSearchLoading();
-      Service.searchExactName(term, function(res){
+      this.tryIssuanceRoute("fetch", { searchTerm: term }, this.guardModuleCallback(targetModule, requestId, function(res) {
         if (token !== Model.activeSearchToken) return;
         Model.isSearchingMain = false;
         if (res && res.length) {
@@ -174,6 +502,24 @@ var Controller = {
         } else {
           View.renderEmpty("No records found");
         }
+      }), function() {
+        Service.searchExactName(term, Controller.guardModuleCallback(targetModule, requestId, function(res){
+          if (token !== Model.activeSearchToken) return;
+          var normalized = Controller.normalizeIssuanceExecutionResult("search", res, "legacy");
+          res = normalized.data;
+          Model.isSearchingMain = false;
+          if (res && res.length) {
+            var filteredRemote = Model.applyMainViewFilters(res);
+            if (!filteredRemote.length) {
+              View.renderEmpty("No records found");
+              return;
+            }
+            Model.filteredData = Model.removeDuplicates(filteredRemote);
+            Controller.renderPage(1);
+          } else {
+            View.renderEmpty("No records found");
+          }
+        }));
       });
     }
   },
@@ -627,7 +973,8 @@ var Controller = {
       var entry = targets[idx++];
       var payload = Controller.buildSavePayload(entry);
 
-      Service.updateIssuanceColumns(
+      Controller.tryIssuanceRoute(
+        "update",
         payload,
         function(result) {
           if (result && result.ok) {
@@ -648,41 +995,89 @@ var Controller = {
           }
           updateNext();
         },
-        function(err) {
-          Service.logClientSaveFailure(payload, err && err.message ? err.message : "The save request failed before the server returned a result.", function(result) {
-            Controller.upsertLocalFailureRecord(Controller.createLocalFailureRecord(entry, payload, result));
-            failures.push({
-              entry: entry,
-              result: result || {
-                ok: false,
-                row: entry._row,
-                message: "The save request failed before the server returned a result.",
-                code: "CLIENT_RPC_FAILURE",
-                debugId: ""
+        function() {
+          Service.updateIssuanceColumns(
+            payload,
+            function(result) {
+              var normalized = Controller.normalizeIssuanceExecutionResult("update", result, "legacy");
+              result = normalized.data;
+              if (result && result.ok) {
+                successes.push({ entry: entry, result: result });
+                if (result.logRow) Controller.removeLocalFailureRecord({ logRow: result.logRow });
+              } else {
+                Controller.upsertLocalFailureRecord(Controller.createLocalFailureRecord(entry, payload, result));
+                failures.push({
+                  entry: entry,
+                  result: result || {
+                    ok: false,
+                    row: entry._row,
+                    message: "The save did not complete.",
+                    code: "UNKNOWN_SAVE_FAILURE",
+                    debugId: ""
+                  }
+                });
               }
-            });
-            updateNext();
-          }, function() {
-            Controller.upsertLocalFailureRecord(Controller.createLocalFailureRecord(entry, payload, {
-              row: entry._row,
-              id: entry.ID || "",
-              name: entry.name || "",
-              message: "The save request failed before the server returned a result.",
-              code: "CLIENT_RPC_FAILURE",
-              debugId: ""
-            }));
-            failures.push({
-              entry: entry,
-              result: {
-                ok: false,
-                row: entry._row,
-                message: "The save request failed before the server returned a result.",
-                code: "CLIENT_RPC_FAILURE",
-                debugId: ""
-              }
-            });
-            updateNext();
-          });
+              updateNext();
+            },
+            function(err) {
+              Controller.tryIssuanceRoute(
+                "logClientSaveFailure",
+                { payload: payload, message: err && err.message ? err.message : "The save request failed before the server returned a result." },
+                function(result) {
+                  Controller.upsertLocalFailureRecord(Controller.createLocalFailureRecord(entry, payload, result));
+                  failures.push({
+                    entry: entry,
+                    result: result || {
+                      ok: false,
+                      row: entry._row,
+                      message: "The save request failed before the server returned a result.",
+                      code: "CLIENT_RPC_FAILURE",
+                      debugId: ""
+                    }
+                  });
+                  updateNext();
+                },
+                function() {
+                  Service.logClientSaveFailure(payload, err && err.message ? err.message : "The save request failed before the server returned a result.", function(result) {
+                    var normalized = Controller.normalizeIssuanceExecutionResult("update", result, "legacy");
+                    result = normalized.data;
+                    Controller.upsertLocalFailureRecord(Controller.createLocalFailureRecord(entry, payload, result));
+                    failures.push({
+                      entry: entry,
+                      result: result || {
+                        ok: false,
+                        row: entry._row,
+                        message: "The save request failed before the server returned a result.",
+                        code: "CLIENT_RPC_FAILURE",
+                        debugId: ""
+                      }
+                    });
+                    updateNext();
+                  }, function() {
+                    Controller.upsertLocalFailureRecord(Controller.createLocalFailureRecord(entry, payload, {
+                      row: entry._row,
+                      id: entry.ID || "",
+                      name: entry.name || "",
+                      message: "The save request failed before the server returned a result.",
+                      code: "CLIENT_RPC_FAILURE",
+                      debugId: ""
+                    }));
+                    failures.push({
+                      entry: entry,
+                      result: {
+                        ok: false,
+                        row: entry._row,
+                        message: "The save request failed before the server returned a result.",
+                        code: "CLIENT_RPC_FAILURE",
+                        debugId: ""
+                      }
+                    });
+                    updateNext();
+                  });
+                }
+              );
+            }
+          );
         }
       );
     };
@@ -698,43 +1093,45 @@ var Controller = {
   },
 
   loadHistoryData: function() {
+    var requestId = this.getCurrentModuleRequestId();
     Model.isHistoryLoading = true;
     View.renderHistoryMeta(null);
     View.showHistoryLoading();
 
-    Service.getIssuanceHistory("", "", function(rows) {
+    Service.getIssuanceHistory("", "", this.guardModuleCallback("issuance", requestId, function(rows) {
       Model.isHistoryLoading = false;
       Model.historyRows = Array.isArray(rows) ? rows : [];
       Model.historyLoadedOnce = true;
       View.renderHistoryMeta({ summary: "Showing all updated students (" + Model.historyRows.length + " records)" });
       View.renderHistoryRows(Model.historyRows);
-    }, function() {
+    }), this.guardModuleCallback("issuance", requestId, function() {
       Model.isHistoryLoading = false;
       Model.historyRows = [];
       Model.historyLoadedOnce = true;
       View.renderHistoryMeta({ summary: "Showing all updated students (0 records)" });
       View.renderHistoryRows([]);
-    });
+    }));
   },
 
   loadSaveFailureHistory: function() {
+    var requestId = this.getCurrentModuleRequestId();
     Model.isSaveFailureLoading = true;
     View.renderSaveFailureMeta("Loading failed save attempts...");
     View.showSaveFailureLoading();
 
-    Service.getSaveFailureHistory(function(rows) {
+    Service.getSaveFailureHistory(this.guardModuleCallback("issuance", requestId, function(rows) {
       Model.isSaveFailureLoading = false;
       Model.saveFailureRows = Controller.getMergedFailureRows(Array.isArray(rows) ? rows : []);
       Model.historyFailureLoadedOnce = true;
       View.renderSaveFailureMeta("Showing failed save attempts (" + Model.saveFailureRows.length + " records)");
       View.renderSaveFailureRows(Model.saveFailureRows);
-    }, function() {
+    }), this.guardModuleCallback("issuance", requestId, function() {
       Model.isSaveFailureLoading = false;
       Model.saveFailureRows = Controller.getMergedFailureRows([]);
       Model.historyFailureLoadedOnce = true;
       View.renderSaveFailureMeta("Showing failed save attempts (" + Model.saveFailureRows.length + " records)");
       View.renderSaveFailureRows(Model.saveFailureRows);
-    });
+    }));
   },
 
   setActiveHistorySection: function(section) {
@@ -747,7 +1144,7 @@ var Controller = {
     if (!logRow) return;
     View.setRetryFailureButtonLoading(logRow, "", true);
     View.showSaveIndicator("Retrying failed save...", "info", 0);
-    Service.retryFailedSave(logRow, function(result) {
+    this.tryIssuanceRoute("retryFailedSave", { logRow: logRow }, function(result) {
       View.setRetryFailureButtonLoading(logRow, "", false);
       if (result && result.ok) {
         if (result.row) {
@@ -765,6 +1162,28 @@ var Controller = {
     }, function(err) {
       View.setRetryFailureButtonLoading(logRow, "", false);
       View.showSaveIndicator((err && err.message ? err.message : "Retry failed before the server returned a result."), "error", 5000);
+    }, function() {
+      Service.retryFailedSave(logRow, function(result) {
+        var normalized = Controller.normalizeIssuanceExecutionResult("retry", result, "legacy");
+        result = normalized.data;
+        View.setRetryFailureButtonLoading(logRow, "", false);
+        if (result && result.ok) {
+          if (result.row) {
+            Controller.syncDatabaseRow(result.row);
+          }
+          Controller.loadHistoryData();
+          Controller.loadSaveFailureHistory();
+          View.showSaveIndicator("Retry succeeded", "success", 3000);
+          if (Model.activeMainView !== "history") Controller.setActiveMainView("history");
+          Controller.setActiveHistorySection("failure");
+        } else {
+          Controller.loadSaveFailureHistory();
+          View.showSaveIndicator((result && result.message ? result.message : "Retry failed.") + (result && result.debugId ? " Debug ID: " + result.debugId : ""), "error", 5000);
+        }
+      }, function(err) {
+        View.setRetryFailureButtonLoading(logRow, "", false);
+        View.showSaveIndicator((err && err.message ? err.message : "Retry failed before the server returned a result."), "error", 5000);
+      });
     });
   },
 
@@ -776,7 +1195,7 @@ var Controller = {
 
     View.setRetryFailureButtonLoading("", localKey, true);
     View.showSaveIndicator("Retrying failed save...", "info", 0);
-    Service.updateIssuanceColumns(failure.payload, function(result) {
+    this.tryIssuanceRoute("update", failure.payload, function(result) {
       View.setRetryFailureButtonLoading("", localKey, false);
       if (result && result.ok) {
         if (result.row) Controller.syncDatabaseRow(result.row);
@@ -804,6 +1223,38 @@ var Controller = {
       }));
       Controller.loadSaveFailureHistory();
       View.showSaveIndicator((err && err.message ? err.message : "Retry failed before the server returned a result."), "error", 5000);
+    }, function() {
+      Service.updateIssuanceColumns(failure.payload, function(result) {
+        var normalized = Controller.normalizeIssuanceExecutionResult("update", result, "legacy");
+        result = normalized.data;
+        View.setRetryFailureButtonLoading("", localKey, false);
+        if (result && result.ok) {
+          if (result.row) Controller.syncDatabaseRow(result.row);
+          Controller.removeLocalFailureRecord({ localKey: localKey });
+          Controller.loadHistoryData();
+          Controller.loadSaveFailureHistory();
+          View.showSaveIndicator("Retry succeeded", "success", 3000);
+          Controller.setActiveMainView("history");
+          Controller.setActiveHistorySection("failure");
+          return;
+        }
+        Controller.upsertLocalFailureRecord(Object.assign({}, failure, {
+          message: (result && result.message) || failure.message,
+          code: (result && result.code) || failure.code,
+          debugId: (result && result.debugId) || failure.debugId,
+          retryResult: (result && result.message) || failure.retryResult,
+          retryDebugId: (result && result.debugId) || failure.retryDebugId
+        }));
+        Controller.loadSaveFailureHistory();
+        View.showSaveIndicator(((result && result.message) || "Retry failed.") + ((result && result.debugId) ? " Debug ID: " + result.debugId : ""), "error", 5000);
+      }, function(err) {
+        View.setRetryFailureButtonLoading("", localKey, false);
+        Controller.upsertLocalFailureRecord(Object.assign({}, failure, {
+          retryResult: err && err.message ? err.message : "Retry failed before the server returned a result."
+        }));
+        Controller.loadSaveFailureHistory();
+        View.showSaveIndicator((err && err.message ? err.message : "Retry failed before the server returned a result."), "error", 5000);
+      });
     });
   },
 
@@ -967,6 +1418,8 @@ var Controller = {
   },
 
   searchBatchStudents: function(term) {
+    var targetModule = Model.activeModule === "typing" ? "typing" : "issuance";
+    var requestId = this.getCurrentModuleRequestId();
     term = (term || "").trim().toLowerCase();
     var token = ++Model.activeBatchSearchToken;
     Model.lastBatchSearchTerm = term;
@@ -996,7 +1449,7 @@ var Controller = {
     }
 
     View.showBatchSearchLoading();
-    Service.searchExactName(term, function(res) {
+    this.tryIssuanceRoute("fetch", { searchTerm: term }, this.guardModuleCallback(targetModule, requestId, function(res) {
       if (token !== Model.activeBatchSearchToken) return;
       if (!res || !res.length) {
         View.renderBatchSearchResults([], true);
@@ -1007,6 +1460,21 @@ var Controller = {
         return Model.passesVerificationFilter(student["Verification Status"], Model.verificationFilterModal);
       }).slice(0, 25);
       View.renderBatchSearchResults(remote, true);
+    }), function() {
+      Service.searchExactName(term, Controller.guardModuleCallback(targetModule, requestId, function(res) {
+        if (token !== Model.activeBatchSearchToken) return;
+        var normalized = Controller.normalizeIssuanceExecutionResult("search", res, "legacy");
+        res = normalized.data;
+        if (!res || !res.length) {
+          View.renderBatchSearchResults([], true);
+          return;
+        }
+        var remote = res.filter(function(student) {
+          if (Model.isBatchSelected(student._row)) return false;
+          return Model.passesVerificationFilter(student["Verification Status"], Model.verificationFilterModal);
+        }).slice(0, 25);
+        View.renderBatchSearchResults(remote, true);
+      }));
     });
   },
 
@@ -1078,19 +1546,21 @@ var Controller = {
   },
 
   loadSoPrefixes: function() {
-    Service.getSavedSoPrefixes(function(prefixes) {
+    var requestId = this.getCurrentModuleRequestId();
+    Service.getSavedSoPrefixes(this.guardModuleCallback("issuance", requestId, function(prefixes) {
       Model.soPrefixes = Array.isArray(prefixes) ? prefixes : [];
       View.renderSoPrefixOptions(Model.soPrefixes);
-    });
+    }));
   },
 
   saveSoPrefixIfNeeded: function(prefix) {
+    var requestId = this.getCurrentModuleRequestId();
     var value = String(prefix || "").trim();
     if (!value) return;
-    Service.saveSoPrefix(value, function(prefixes) {
+    Service.saveSoPrefix(value, this.guardModuleCallback("issuance", requestId, function(prefixes) {
       Model.soPrefixes = Array.isArray(prefixes) ? prefixes : Model.soPrefixes;
       View.renderSoPrefixOptions(Model.soPrefixes);
-    });
+    }));
   },
 
   saveEdit: function() {
@@ -1242,7 +1712,11 @@ var Controller = {
   },
 
   startDatabaseRowPolling: function() {
-    setInterval(function() {
+    if (Model.databaseRowPollingTimer) {
+      clearInterval(Model.databaseRowPollingTimer);
+    }
+    Model.databaseRowPollingTimer = setInterval(function() {
+      if (String((Model.executionLock && Model.executionLock.activeModule) || "") !== "issuance") return;
       if (Model.isSyncingRow) return;
 
       Service.getDatabaseRowUpdateInfo(function(info) {
@@ -1272,7 +1746,7 @@ var Controller = {
   syncDatabaseRow: function(rowNumber) {
     Model.isSyncingRow = true;
 
-    Service.getDatabaseRow(rowNumber, function(updatedRow) {
+    this.tryIssuanceRoute("fetch", { row: rowNumber }, function(updatedRow) {
       Model.isSyncingRow = false;
       if (!updatedRow || !updatedRow._row) return;
 
@@ -1307,6 +1781,45 @@ var Controller = {
       }
     }, function() {
       Model.isSyncingRow = false;
+    }, function() {
+      Service.getDatabaseRow(rowNumber, function(updatedRow) {
+        var normalized = Controller.normalizeIssuanceExecutionResult("fetch", updatedRow, "legacy");
+        updatedRow = normalized.data;
+        Model.isSyncingRow = false;
+        if (!updatedRow || !updatedRow._row) return;
+
+        var replaced = false;
+
+        Model.fullData = Model.fullData.map(function(row) {
+          if (String(row._row) === String(updatedRow._row)) {
+            replaced = true;
+            return updatedRow;
+          }
+          return row;
+        })
+        
+        if (!replaced) {
+          return;
+        }
+
+        if (Model.searchMode) {
+          Controller.doSearch(Model.lastMainSearchTerm || "");
+        } else {
+          Model.filteredData = Model.fullData.filter(function(r) {
+            return true;
+          });
+          Model.filteredData = Model.applyMainViewFilters(Model.fullData);
+          Controller.renderPage(Model.currentPage);
+        }
+
+        Model.recomputeBatchSoPreviews();
+        View.renderSelectedBatchList();
+        if (Model.editingRowID) {
+          Controller.applyCurrentRecordPermissions(Model.getCurrentStudent());
+        }
+      }, function() {
+        Model.isSyncingRow = false;
+      });
     });
   },
 
@@ -1339,6 +1852,23 @@ var Controller = {
         Controller.doSearch("");
       });
       updateClearButtonState(searchInput, searchClearBtn);
+    }
+
+    var typingSearchInput = document.getElementById("typingSearchInput");
+    var typingSearchClearBtn = document.getElementById("typingSearchClearBtn");
+    if (typingSearchInput) {
+      typingSearchInput.addEventListener("input", function(e) {
+        updateClearButtonState(typingSearchInput, typingSearchClearBtn);
+        Controller.searchDebounced(e.target.value);
+      });
+    }
+    if (typingSearchClearBtn && typingSearchInput) {
+      typingSearchClearBtn.addEventListener("click", function() {
+        typingSearchInput.value = "";
+        updateClearButtonState(typingSearchInput, typingSearchClearBtn);
+        Controller.doSearch("");
+      });
+      updateClearButtonState(typingSearchInput, typingSearchClearBtn);
     }
 
     var statusFilterMain = document.getElementById("statusFilterMain");
@@ -1450,6 +1980,17 @@ var Controller = {
       });
     }
 
+    var typingPageInput = document.getElementById("typingPageJumpInput");
+    var typingPageBtn = document.getElementById("typingPageJumpBtn");
+    if (typingPageBtn && typingPageInput) {
+      typingPageBtn.addEventListener("click", function() {
+        Controller.goToPage(typingPageInput.value);
+      });
+      typingPageInput.addEventListener("keydown", function(e) {
+        if (e.key === "Enter") Controller.goToPage(typingPageInput.value);
+      });
+    }
+
     Object.keys(this.formFieldMap).forEach(function(id) {
       var el = document.getElementById(id);
       if (!el) return;
@@ -1472,6 +2013,13 @@ var Controller = {
     if (editModal) {
       editModal.addEventListener("click", function(e) {
         if (e.target === editModal) View.closeEditModal();
+      });
+    }
+
+    var typingEditModal = document.getElementById("typingEditModal");
+    if (typingEditModal) {
+      typingEditModal.addEventListener("click", function(e) {
+        if (e.target === typingEditModal) View.closeTypingEditModal();
       });
     }
 

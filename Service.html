@@ -1,54 +1,172 @@
 <script>
 var Service = {
+  buildContext: function(module, source) {
+    var context = {
+      module: String(module || Model.activeModule || "issuance"),
+      requestId: Number((Model.executionLock && Model.executionLock.requestId) || 0),
+      source: String(source || "ui"),
+      timestamp: new Date().toISOString()
+    };
+    Model.serviceContext = Object.assign({}, context);
+    console.log("[CONTEXT ATTACHED] " + context.module + " + " + context.requestId);
+    return context;
+  },
+
+  validateContext: function(context) {
+    var activeModule = String((Model.executionLock && Model.executionLock.activeModule) || "");
+    var activeRequestId = Number((Model.executionLock && Model.executionLock.requestId) || 0);
+    var valid = activeModule === String(context.module || "") && activeRequestId === Number(context.requestId || 0);
+    console.log("[CONTEXT VALIDATED] " + (valid ? "OK" : "FAILED"));
+    return valid;
+  },
+
+  assertModuleContext: function(module) {
+    var expected = String(module || "");
+    var activeModule = String((Model.executionLock && Model.executionLock.activeModule) || "");
+    if (expected && activeModule && expected !== activeModule) {
+      console.log("[SERVICE BLOCKED] module mismatch");
+      return false;
+    }
+    return true;
+  },
+
+  attachPayloadContext: function(payload, context) {
+    var nextPayload = payload && typeof payload === "object" ? Object.assign({}, payload) : {};
+    nextPayload.__context = Object.assign({}, context);
+    return nextPayload;
+  },
+
+  wrapSuccess: function(context, onSuccess, safeValue) {
+    return function(result) {
+      if (!Service.validateContext(context)) {
+        console.log("[SERVICE BLOCKED] module mismatch");
+        if (typeof onSuccess === "function") onSuccess(safeValue);
+        return;
+      }
+      if (typeof onSuccess === "function") onSuccess(result);
+    };
+  },
+
+  wrapFailure: function(context, onFailure) {
+    return function(error) {
+      if (!Service.validateContext(context)) {
+        console.log("[SERVICE BLOCKED] module mismatch");
+        return;
+      }
+      if (typeof onFailure === "function") onFailure(error);
+    };
+  },
+
   getInitialData: function(batchSize, onSuccess) {
-    google.script.run.withSuccessHandler(onSuccess).getInitialData(batchSize);
+    var context = this.buildContext(Model.activeModule || "issuance", "ui");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess({ data: [], total: 0, viewConfig: Model.recordViewConfig || {} });
+      return;
+    }
+    google.script.run
+      .withSuccessHandler(this.wrapSuccess(context, onSuccess, { data: [], total: 0, viewConfig: Model.recordViewConfig || {} }))
+      .getInitialData(batchSize, context);
   },
 
   loadRemainingData: function(startRow, batchSize, onSuccess) {
-    google.script.run.withSuccessHandler(onSuccess).loadRemainingData(startRow, batchSize);
+    var context = this.buildContext(Model.activeModule || "issuance", "internal");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess({ data: [] });
+      return;
+    }
+    google.script.run
+      .withSuccessHandler(this.wrapSuccess(context, onSuccess, { data: [] }))
+      .loadRemainingData(startRow, batchSize, context);
   },
 
   searchExactName: function(term, onSuccess) {
-    google.script.run.withSuccessHandler(onSuccess).searchExactName(term);
+    var context = this.buildContext(Model.activeModule || "issuance", "ui");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess([]);
+      return;
+    }
+    google.script.run
+      .withSuccessHandler(this.wrapSuccess(context, onSuccess, []))
+      .searchExactName(term, context);
   },
 
   getSavedSoPrefixes: function(onSuccess) {
-    google.script.run.withSuccessHandler(onSuccess).getSavedSoPrefixes();
+    var context = this.buildContext(Model.activeModule || "issuance", "internal");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess([]);
+      return;
+    }
+    google.script.run
+      .withSuccessHandler(this.wrapSuccess(context, onSuccess, []))
+      .getSavedSoPrefixes();
   },
 
   saveSoPrefix: function(prefix, onSuccess) {
-    google.script.run.withSuccessHandler(onSuccess).saveSoPrefix(prefix);
+    var context = this.buildContext(Model.activeModule || "issuance", "internal");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess([]);
+      return;
+    }
+    google.script.run
+      .withSuccessHandler(this.wrapSuccess(context, onSuccess, []))
+      .saveSoPrefix(prefix);
   },
 
   updateIssuanceColumns: function(payload, onSuccess, onFailure) {
+    var context = this.buildContext(Model.activeModule || "issuance", "ui");
+    if (!this.assertModuleContext(context.module)) {
+      console.log("[SERVICE BLOCKED] module mismatch");
+      if (onSuccess) onSuccess({ ok: false, message: "Service call blocked by module context." });
+      return;
+    }
     google.script.run
-      .withSuccessHandler(onSuccess)
-      .withFailureHandler(onFailure)
-      .updateIssuanceColumns(payload);
+      .withSuccessHandler(this.wrapSuccess(context, onSuccess, { ok: false, message: "Service call blocked by module context." }))
+      .withFailureHandler(this.wrapFailure(context, onFailure))
+      .updateIssuanceColumns(payload, context);
   },
 
   getIssuanceHistory: function(studentId, studentName, onSuccess, onFailure) {
-    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
-    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    var context = this.buildContext(Model.activeModule || "issuance", "internal");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess([]);
+      return;
+    }
+    var runner = google.script.run.withSuccessHandler(this.wrapSuccess(context, onSuccess || function(){}, []));
+    if (onFailure) runner = runner.withFailureHandler(this.wrapFailure(context, onFailure));
     runner.getIssuanceHistory(studentId, studentName);
   },
 
   getSaveFailureHistory: function(onSuccess, onFailure) {
-    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
-    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    var context = this.buildContext(Model.activeModule || "issuance", "retry");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess([]);
+      return;
+    }
+    var runner = google.script.run.withSuccessHandler(this.wrapSuccess(context, onSuccess || function(){}, []));
+    if (onFailure) runner = runner.withFailureHandler(this.wrapFailure(context, onFailure));
     runner.getSaveFailureHistory();
   },
 
   retryFailedSave: function(logRow, onSuccess, onFailure) {
-    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
-    if (onFailure) runner = runner.withFailureHandler(onFailure);
-    runner.retryFailedSave(logRow);
+    var context = this.buildContext(Model.activeModule || "issuance", "retry");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess({ ok: false, message: "Service call blocked by module context." });
+      return;
+    }
+    var runner = google.script.run.withSuccessHandler(this.wrapSuccess(context, onSuccess || function(){}, { ok: false, message: "Service call blocked by module context." }));
+    if (onFailure) runner = runner.withFailureHandler(this.wrapFailure(context, onFailure));
+    runner.retryFailedSave(logRow, context);
   },
 
   logClientSaveFailure: function(payload, message, onSuccess, onFailure) {
-    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
-    if (onFailure) runner = runner.withFailureHandler(onFailure);
-    runner.logClientSaveFailure(payload, message);
+    var context = this.buildContext(Model.activeModule || "issuance", "retry");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess({ ok: false, message: "Service call blocked by module context." });
+      return;
+    }
+    var runner = google.script.run.withSuccessHandler(this.wrapSuccess(context, onSuccess || function(){}, { ok: false, message: "Service call blocked by module context." }));
+    if (onFailure) runner = runner.withFailureHandler(this.wrapFailure(context, onFailure));
+    runner.logClientSaveFailure(payload, message, context);
   },
 
   getAccountName: function(onSuccess) {
@@ -71,6 +189,62 @@ var Service = {
     google.script.run.withSuccessHandler(onSuccess).getUserPositionFieldSchema();
   },
 
+  getUserModuleAccess: function() {
+    return new Promise(function(resolve, reject) {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)
+        .getUserModuleAccess();
+    });
+  },
+
+  createTypingBatch: function(payload) {
+    var context = this.buildContext(Model.activeModule || "typing", "ui");
+    if (!this.assertModuleContext(context.module)) {
+      return Promise.resolve({ handled: true, status: "FAILED", data: { inserted: 0, skippedDuplicates: 0, failed: 0 } });
+    }
+    return new Promise(function(resolve, reject) {
+      google.script.run
+        .withSuccessHandler(Service.wrapSuccess(context, resolve, { handled: true, status: "FAILED", data: { inserted: 0, skippedDuplicates: 0, failed: 0 } }))
+        .withFailureHandler(Service.wrapFailure(context, reject))
+        .routeModule("typing", "createBatch", Service.attachPayloadContext(payload, context));
+    });
+  },
+
+  getDashboardData: function(filters) {
+    var context = this.buildContext(Model.activeModule || "dashboard", "ui");
+    if (!this.assertModuleContext(context.module)) {
+      return Promise.resolve(null);
+    }
+    return new Promise(function(resolve, reject) {
+      google.script.run
+        .withSuccessHandler(Service.wrapSuccess(context, function(result) {
+          if (result && result.handled === false && result.status === "NOT_IMPLEMENTED") {
+            google.script.run
+              .withSuccessHandler(Service.wrapSuccess(context, resolve, null))
+              .withFailureHandler(Service.wrapFailure(context, reject))
+              .getDashboardData(Service.attachPayloadContext(filters || {}, context));
+            return;
+          }
+          if (result && result.handled === true) {
+            resolve(result.data);
+            return;
+          }
+          google.script.run
+            .withSuccessHandler(Service.wrapSuccess(context, resolve, null))
+            .withFailureHandler(Service.wrapFailure(context, reject))
+            .getDashboardData(Service.attachPayloadContext(filters || {}, context));
+        }, null))
+        .withFailureHandler(Service.wrapFailure(context, function() {
+          google.script.run
+            .withSuccessHandler(Service.wrapSuccess(context, resolve, null))
+            .withFailureHandler(Service.wrapFailure(context, reject))
+            .getDashboardData(Service.attachPayloadContext(filters || {}, context));
+        }))
+        .routeModule("dashboard", "fetch", Service.attachPayloadContext(filters || {}, context));
+    });
+  },
+
   getNavbarLogoData: function(onSuccess, onFailure) {
     var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
     if (onFailure) runner = runner.withFailureHandler(onFailure);
@@ -78,13 +252,25 @@ var Service = {
   },
 
   getDatabaseRowUpdateInfo: function(onSuccess) {
-    google.script.run.withSuccessHandler(onSuccess).getDatabaseRowInfo();
+    var context = this.buildContext(Model.activeModule || "issuance", "polling");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess(null);
+      return;
+    }
+    google.script.run
+      .withSuccessHandler(this.wrapSuccess(context, onSuccess, null))
+      .getDatabaseRowInfo(context);
   },
 
   getDatabaseRow: function(rowNumber, onSuccess, onFailure) {
-    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
-    if (onFailure) runner = runner.withFailureHandler(onFailure);
-    runner.getDatabaseRow(rowNumber);
+    var context = this.buildContext(Model.activeModule || "issuance", "polling");
+    if (!this.assertModuleContext(context.module)) {
+      if (onSuccess) onSuccess(null);
+      return;
+    }
+    var runner = google.script.run.withSuccessHandler(this.wrapSuccess(context, onSuccess || function(){}, null));
+    if (onFailure) runner = runner.withFailureHandler(this.wrapFailure(context, onFailure));
+    runner.getDatabaseRow(rowNumber, context);
   }
 };
 </script>

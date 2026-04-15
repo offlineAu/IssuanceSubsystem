@@ -16,7 +16,7 @@
         </div>
       </div>
       <div class="app-navbar-title-wrap">
-        <h1 class="app-navbar-title">Issuance Tracking System</h1>
+        <h1 class="app-navbar-title" id="appNavbarTitle">Issuance Tracking System</h1>
       </div>
       <div class="app-navbar-title-spacer" aria-hidden="true"></div>
     </div>
@@ -29,6 +29,8 @@
             <span>Loading...</span>
           </span>
         </span>
+        <div id="currentModuleIndicator">Current Module: -</div>
+        <div id="noModuleAssignedMessage" class="d-none">No module assigned</div>
       </div>
       <div class="app-navbar-tabs">
         <button type="button" class="app-navbar-link is-active" id="navHomeBtn" data-view="home" aria-pressed="true">

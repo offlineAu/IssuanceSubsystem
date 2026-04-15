@@ -34,6 +34,44 @@ var Model = {
   isSaveFailureLoading: false,
   isSavingBatch: false,
   userRole: "Viewer",
+  userContext: {
+    email: null,
+    position: null,
+    access: "",
+    modules: []
+  },
+  activeModule: null,
+  executionLock: {
+    activeModule: null,
+    requestId: 0
+  },
+  serviceContext: {
+    module: null,
+    requestId: null,
+    source: null,
+    timestamp: null
+  },
+  issuance: {
+    fullData: [],
+    filteredData: [],
+    batchStudents: [],
+    editingRowID: null,
+    lastFocusedStudentRow: null
+  },
+  typing: {
+    batchId: null,
+    students: [],
+    isSaving: false,
+    progress: {
+      total: 0,
+      saved: 0,
+      failed: 0
+    }
+  },
+  dashboard: {
+    data: null,
+    isLoading: false
+  },
   accessContext: {
     email: "",
     knownUser: false,
@@ -91,6 +129,37 @@ var Model = {
   historyFailureLoadedOnce: false,
   activeHistorySection: "success",
   lastSaveOutcomeSummary: "",
+
+  assertModuleStateIsolation: function() {
+    if (!this.issuance || typeof this.issuance !== "object") this.issuance = {};
+    if (!this.typing || typeof this.typing !== "object") this.typing = {};
+    if (!this.dashboard || typeof this.dashboard !== "object") this.dashboard = {};
+
+    this.issuance.fullData = Array.isArray(this.fullData) ? this.fullData.slice() : [];
+    this.issuance.filteredData = Array.isArray(this.filteredData) ? this.filteredData.slice() : [];
+    this.issuance.batchStudents = Array.isArray(this.batchStudents) ? this.batchStudents.slice() : [];
+    this.issuance.editingRowID = this.editingRowID;
+    this.issuance.lastFocusedStudentRow = this.lastFocusedStudentRow;
+
+    if (!Array.isArray(this.typing.students)) this.typing.students = [];
+    if (!this.typing.progress || typeof this.typing.progress !== "object") {
+      this.typing.progress = { total: 0, saved: 0, failed: 0 };
+    }
+    if (!Object.prototype.hasOwnProperty.call(this.dashboard, "data")) this.dashboard.data = null;
+    if (!Object.prototype.hasOwnProperty.call(this.dashboard, "isLoading")) this.dashboard.isLoading = false;
+
+    console.log("[MODULE STATE] Isolation check passed");
+    return true;
+  },
+
+  safeSet: function(module, key, value) {
+    if (String(module || "") !== String((this.executionLock && this.executionLock.activeModule) || "")) {
+      console.log("[EXECUTION BLOCKED] stale callback ignored");
+      return false;
+    }
+    this[key] = value;
+    return true;
+  },
 
   setEditingRow: function(id) {
     this.editingRowID = id;

@@ -24,116 +24,18 @@ var View = {
   },
 
   cleanupInactiveModules: function(activeModule) {
-    console.log("[MODULE CLEANUP] Hiding inactive modules");
-    var moduleConfigs = {
-      issuance: {
-        containerId: "issuanceHomeContent",
-        clearIds: ["searchResults", "searchResultsMobile", "statusText"],
-        overlayId: "loadingOverlay"
-      },
-      typing: {
-        containerId: "typingHomeContent",
-        clearIds: ["typingSelectedBatchList", "typingSearchResults", "typingSearchResultsMobile", "typingStatusText", "typingSaveActionError", "typingUpdateActionError"],
-        overlayId: "typingLoadingOverlay",
-        modalId: "typingEditModal"
-      },
-      dashboard: {
-        containerId: "dashboardHomeContent",
-        clearIds: ["dashboardKpiGrid", "dashboardWorkloadList", "dashboardProgramsList", "dashboardStatusList", "dashboardProgressionList", "dashboardTurnaroundSummary", "dashboardTurnaroundList", "dashboardLocationLoadList", "dashboardMonthlyList", "dashboardSlaList", "dashboardBacklogList", "dashboardProductivityList"],
-        metaId: "dashboardMeta"
-      }
-    };
-
-    Object.keys(moduleConfigs).forEach(function(moduleName) {
-      if (moduleName === activeModule) return;
-      var config = moduleConfigs[moduleName];
-      var container = View.getEl(config.containerId);
-      if (container) {
-        container.classList.add("d-none");
-        container.style.display = "none";
-      }
-      (config.clearIds || []).forEach(function(id) {
-        var el = View.getEl(id);
-        if (!el) return;
-        if (id.toLowerCase().indexOf("status") !== -1 || id.toLowerCase().indexOf("error") !== -1) {
-          el.textContent = "";
-        } else {
-          el.innerHTML = "";
-        }
-      });
-      if (config.overlayId) {
-        var overlay = View.getEl(config.overlayId);
-        if (overlay) overlay.style.display = "none";
-      }
-      if (config.modalId) {
-        var modal = View.getEl(config.modalId);
-        if (modal) modal.classList.remove("show");
-      }
-      if (config.metaId) {
-        var meta = View.getEl(config.metaId);
-        if (meta) meta.textContent = "";
-      }
-    });
+    // Standalone module architecture - each module handles its own state.
+    console.log("[MODULE CLEANUP] Standalone mode");
   },
 
   renderModuleState: function() {
-    var issuanceHome = this.getEl("issuanceHomeContent");
-    var typingHome = this.getEl("typingHomeContent");
-    var dashboardHome = this.getEl("dashboardHomeContent");
-    var reportBtn = this.getEl("navReportBtn");
-    var historyBtn = this.getEl("navHistoryBtn");
-    var reportView = this.getEl("reportView");
-    var historyView = this.getEl("historyView");
-    var homeView = this.getEl("homeView");
     var titleEl = this.getEl("appNavbarTitle");
-    var activeModule = Model.activeModule;
-    var isIssuance = activeModule === "issuance";
-    var isTyping = activeModule === "typing";
-    var isDashboard = activeModule === "dashboard";
-
-    Model.assertModuleStateIsolation();
-    this.cleanupInactiveModules(activeModule);
-    console.log("[MODULE RENDER] Active module: " + (activeModule || "none"));
-
-    if (issuanceHome) {
-      issuanceHome.classList.toggle("d-none", !isIssuance);
-      issuanceHome.style.display = isIssuance ? "" : "none";
-    }
-    if (typingHome) {
-      typingHome.classList.toggle("d-none", !isTyping);
-      typingHome.style.display = isTyping ? "" : "none";
-    }
-    if (dashboardHome) {
-      dashboardHome.classList.toggle("d-none", !isDashboard);
-      dashboardHome.style.display = isDashboard ? "" : "none";
-    }
-    if (reportBtn) reportBtn.classList.toggle("d-none", !isIssuance);
-    if (historyBtn) historyBtn.classList.toggle("d-none", !isIssuance);
-    if (!isIssuance) {
-      if (reportView) reportView.classList.add("d-none");
-      if (historyView) historyView.classList.add("d-none");
-      if (homeView) homeView.classList.remove("d-none");
-    }
     if (titleEl) {
-      titleEl.textContent = isTyping
-        ? "Typing Records System"
-        : (isDashboard ? "Executive Dashboard" : "Issuance Tracking System");
+      titleEl.textContent = "Issuance Tracking System";
     }
   },
 
   getTableRenderContext: function() {
-    if (Model.activeModule === "typing") {
-      return {
-        headerRowId: "typingSearchTableHeaderRow",
-        resultsId: "typingSearchResults",
-        mobileId: "typingSearchResultsMobile",
-        statusId: "typingStatusText",
-        paginationId: "typingPagination",
-        pageInputId: "typingPageJumpInput",
-        pageMetaId: "typingPageMeta",
-        overlayId: "typingLoadingOverlay"
-      };
-    }
     return {
       headerRowId: "searchTableHeaderRow",
       resultsId: "searchResults",
@@ -159,6 +61,7 @@ var View = {
     if (home) home.classList.toggle("d-none", isReport || isHistory);
     if (report) report.classList.toggle("d-none", !isReport);
     if (history) history.classList.toggle("d-none", !isHistory);
+    
     if (homeBtn) {
       homeBtn.classList.toggle("is-active", !isReport && !isHistory);
       homeBtn.setAttribute("aria-pressed", String(!isReport && !isHistory));
@@ -506,267 +409,224 @@ var View = {
   },
 
   renderTypingModule: function() {
-    if (Model.activeModule !== "typing") return;
-    var listEl = this.getEl("typingSelectedBatchList");
-    var saveBtn = this.getEl("typingSaveBatchBtn");
-    var typing = Model.typing || {};
-    var students = Array.isArray(typing.students) ? typing.students : [];
-    if (listEl) {
-      if (!students.length) {
-        listEl.innerHTML = "<div class='selected-batch-empty text-muted small'>No students added yet</div>";
-      } else {
-        listEl.innerHTML = students.map(function(student, index) {
-          return "<div class='selected-student-item border rounded'>" +
-            "<div class='selected-student-card-header'>" +
-              "<div>" +
-                "<div class='selected-student-card-title'>" + View.escapeHtml(student.studentName || ("Student " + (index + 1))) + "</div>" +
-                "<div class='selected-student-card-subtitle'>HEI: " + View.escapeHtml(student.hei || "-") + "</div>" +
-              "</div>" +
-              "<div class='selected-student-card-actions'>" +
-                "<button type='button' class='btn btn-sm btn-outline-danger' onclick='Controller.removeTypingStudent(" + index + ")'><i class=\"bi bi-trash\"></i></button>" +
-              "</div>" +
-            "</div>" +
-            "<div class='selected-student-fields read-only'>" +
-              "<div class='selected-student-field'><span>Date Received</span><strong>" + View.escapeHtml(student.dateReceived || "-") + "</strong></div>" +
-              "<div class='selected-student-field'><span>Program</span><strong>" + View.escapeHtml(student.program || "-") + "</strong></div>" +
-              "<div class='selected-student-field selected-student-field-full'><span>Date of Graduation</span><strong>" + View.escapeHtml(student.dateOfGraduation || "-") + "</strong></div>" +
-            "</div>" +
+    if (typeof TypingView !== "undefined" && TypingView && typeof TypingView.render === "function") {
+      return TypingView.render.apply(TypingView, arguments);
+    }
+  },
+
+  // DASHBOARD LEGACY (PENDING DELETE): superseded by DashboardView.html module implementation.
+  dashboard: {
+    render: function(data) {
+      if (Model.activeModule !== "dashboard") return;
+      var dom = Model.dashboard.dom || {};
+      var root = dom.root || document.getElementById("dashboardHomeContent");
+      if (!root) return;
+
+      if (!data && Model.dashboard.isLoading) {
+        this.renderEmpty("Loading dashboard data...");
+        if (dom.meta) dom.meta.textContent = "Loading analytics...";
+        console.log("[MODULE DASHBOARD] render complete");
+        return;
+      }
+
+      if (!data || data.error) {
+        this.renderError((data && data.error) || Model.dashboard.error || "No dashboard data available.");
+        console.log("[MODULE DASHBOARD] render complete");
+        return;
+      }
+
+      this.renderKpis(data.summary || {});
+      this.renderSections(data.sections || {});
+      if (dom.meta) {
+        var meta = data.meta || {};
+        dom.meta.textContent = "Source: " + View.escapeHtml(meta.source || "BigQuery") +
+          (meta.loadedAt ? " | Loaded: " + View.escapeHtml(meta.loadedAt) : "");
+      }
+      console.log("[MODULE DASHBOARD] render complete");
+    },
+
+    renderKpis: function(summary) {
+      var dom = Model.dashboard.dom || {};
+      if (!dom.kpiGrid) return;
+      var cards = [
+        ["Total", summary.total],
+        ["For Evaluation", summary.forEvaluation],
+        ["Evaluated", summary.evaluated],
+        ["Deficiency", summary.deficiency],
+        ["Approved", summary.approved],
+        ["Verified", summary.verified],
+        ["For Signature", summary.forSignature],
+        ["For Release", summary.forRelease],
+        ["Released", summary.released],
+        ["Cancelled", summary.cancelled]
+      ];
+      var visibleCards = [];
+      var zeroCards = [];
+      cards.forEach(function(card) {
+        var value = Number(card[1] || 0);
+        if (card[0] === "Total" || value > 0) visibleCards.push(card);
+        else zeroCards.push(card[0]);
+      });
+      if (zeroCards.length) visibleCards.push(["Inactive Stages", 0, zeroCards.join(" / ")]);
+      if (!visibleCards.length) visibleCards = [["Total", 0]];
+      dom.kpiGrid.innerHTML = visibleCards.map(function(card) {
+        var isGroupedZeroCard = card[0] === "Inactive Stages";
+        return '<div class="report-stat-card' + (isGroupedZeroCard ? ' report-stat-card-muted report-stat-card-grouped' : '') + '"><span class="report-stat-label">' + View.escapeHtml(card[0]) + '</span>' +
+          (isGroupedZeroCard
+            ? '<div class="report-stat-muted-copy">No current records: ' + View.escapeHtml(card[2] || "") + '</div>'
+            : '<strong class="report-stat-value">' + View.escapeHtml(View.formatReportCount(card[1] || 0)) + "</strong>") +
           "</div>";
+      }).join("");
+    },
+
+    renderSections: function(sections) {
+      var dom = Model.dashboard.dom || {};
+      var workloadRows = Array.isArray(sections.es2Ownership && sections.es2Ownership.rows) ? sections.es2Ownership.rows : [];
+      var statusRows = Array.isArray(sections.overallApplicationStatus && sections.overallApplicationStatus.rows) ? sections.overallApplicationStatus.rows : [];
+      var topProgramsRows = Array.isArray(sections.topPrograms && sections.topPrograms.rows) ? sections.topPrograms.rows : [];
+      var locationRows = Array.isArray(sections.locationLoad && sections.locationLoad.rows) ? sections.locationLoad.rows : [];
+      var monthlyRows = Array.isArray(sections.monthlyVolume && sections.monthlyVolume.rows) ? sections.monthlyVolume.rows : [];
+      var slaRows = Array.isArray(sections.slaExposure && sections.slaExposure.rows) ? sections.slaExposure.rows : [];
+      var backlogRows = Array.isArray(sections.stageBacklog && sections.stageBacklog.rows) ? sections.stageBacklog.rows : [];
+      var productivityRows = Array.isArray(sections.productivity && sections.productivity.rows) ? sections.productivity.rows : [];
+      var turnaround = (sections.turnaroundTime && typeof sections.turnaroundTime === "object") ? sections.turnaroundTime : {};
+      var turnaroundRows = Array.isArray(turnaround.rows) ? turnaround.rows : [];
+      var turnaroundSummary = (turnaround.summary && typeof turnaround.summary === "object") ? turnaround.summary : {};
+      var summaryFallback = Number((((Model.dashboard || {}).data || {}).summary || {}).total || 0);
+
+      if (dom.workloadList) {
+        dom.workloadList.innerHTML = workloadRows.length
+          ? "<div class='table-responsive'><table class='table table-hover align-middle mb-0 analytics-table'><thead><tr><th>ES II Owner</th><th>Approved</th><th>Deficiency</th><th>Processing / Pending</th><th>Total</th></tr></thead><tbody>" +
+            workloadRows.map(function(item) {
+              return "<tr><td><button type='button' class='analytics-link-button'>" + View.escapeHtml(item.es2 || "-") + "</button></td><td>" + View.escapeHtml(View.formatReportCount(item.approvedCount || 0)) + "</td><td>" + View.escapeHtml(View.formatReportCount(item.deficiencyCount || 0)) + "</td><td>" + View.escapeHtml(View.formatReportCount(item.processingPendingCount || 0)) + "</td><td>" + View.escapeHtml(View.formatReportCount(item.totalApplications || 0)) + "</td></tr>";
+            }).join("") +
+            "</tbody></table></div>"
+          : "<div class='report-empty-state'>No data available.</div>";
+      }
+
+      if (dom.programsList) {
+        dom.programsList.innerHTML = topProgramsRows.length
+          ? "<div class='report-ranked-list report-scroll-body'>" +
+            topProgramsRows.map(function(item, index) {
+              return "<div class='ranked-list-item'><span class='ranked-list-rank'>#" + View.escapeHtml(item.rank || (index + 1)) + "</span><div class='ranked-list-body'><span class='ranked-list-name'>" + View.escapeHtml(item.program || "-") + "</span><strong class='ranked-list-value'>" + View.escapeHtml(View.formatReportCount(item.total || 0)) + "</strong></div></div>";
+            }).join("") +
+            "</div>"
+          : "<div class='report-empty-state'>No program analytics available.</div>";
+      }
+
+      if (dom.statusList) {
+        dom.statusList.innerHTML = statusRows.length
+          ? statusRows.map(function(item) {
+              return "<div class='dashboard-list-row'><span class='dashboard-list-label'>" + View.escapeHtml(item.label || item.status || "-") + "</span><strong class='dashboard-list-value'>" + View.escapeHtml(View.formatReportCount(item.value || item.count || 0)) + "</strong></div>";
+            }).join("")
+          : "<div class='report-empty-state'>No status distribution available.</div>";
+      }
+
+      if (dom.progressionList) {
+        dom.progressionList.innerHTML = statusRows.length
+          ? statusRows.map(function(item) {
+              var value = Number(item.value || item.count || 0);
+              var width = Math.max(8, Math.min(100, value > 0 && summaryFallback ? Math.round((value / Math.max(summaryFallback, value)) * 100) : 8));
+              return "<div class='report-bar-row'><div class='report-bar-text'><span class='report-bar-label'>" + View.escapeHtml(item.label || item.status || "-") + "</span><strong class='report-bar-value'>" + View.escapeHtml(View.formatReportCount(value)) + "</strong></div><div class='report-bar-track'><span class='report-bar-fill report-bar-fill-status' style='width:" + width + "%'></span></div></div>";
+            }).join("")
+          : "<div class='report-empty-state'>No status progression available.</div>";
+      }
+
+      if (dom.turnaroundSummary) {
+        dom.turnaroundSummary.innerHTML = [
+          { label: "Eligible Records", value: turnaroundSummary.eligibleRecords || turnaroundSummary.totalEligible || turnaroundRows.reduce(function(sum, row) { return sum + Number(row.count || row.sampleCount || 0); }, 0) },
+          { label: "Average Total Days", value: turnaroundSummary.averageDays || turnaroundSummary.avgDays || 0 },
+          { label: "Median Total Days", value: turnaroundSummary.medianDays || turnaroundSummary.minDays || 0 }
+        ].map(function(item) {
+          return "<div class='report-stat-card turnaround-stat-card h-100'><span class='report-stat-label'>" + View.escapeHtml(item.label) + "</span><strong class='report-stat-value'>" + View.escapeHtml(View.formatReportCount(item.value || 0)) + "</strong></div>";
         }).join("");
       }
-    }
-    if (saveBtn) {
-      saveBtn.disabled = !!typing.isSaving || !students.length;
-      saveBtn.textContent = typing.isSaving ? "Saving..." : "Save Batch";
+
+      if (dom.turnaroundHighlights) {
+        var leadTurnaround = turnaroundRows[0] || null;
+        dom.turnaroundHighlights.innerHTML = leadTurnaround
+          ? "<div class='report-card report-card-compact mb-3'><div class='report-stat-label'>Primary Turnaround Signal</div><div class='d-flex justify-content-between align-items-end gap-3 mt-2'><strong class='fs-5'>" + View.escapeHtml(leadTurnaround.label || "-") + "</strong><span class='text-muted small'>" + View.escapeHtml(View.formatReportCount(leadTurnaround.count || leadTurnaround.sampleCount || 0)) + " records</span></div></div>"
+          : "";
+      }
+
+      if (dom.turnaroundList) {
+        dom.turnaroundList.innerHTML = turnaroundRows.length
+          ? turnaroundRows.map(function(item) {
+              return "<div class='col-12 col-xxl-6'><section class='report-card report-card-compact h-100'><div class='d-flex justify-content-between align-items-start gap-3 mb-3'><div><div class='report-placeholder-kicker'>Evaluation Status</div><h4 class='mb-1'>" + View.escapeHtml(item.label || item.bucket || "-") + "</h4></div><div class='text-end'><div class='report-stat-label'>Eligible Records</div><strong class='report-stat-value fs-5'>" + View.escapeHtml(View.formatReportCount(item.count || item.sampleCount || 0)) + "</strong></div></div><div class='dashboard-mini-metric-grid'><div class='dashboard-mini-metric'><span>Average Business Days</span><strong>" + View.escapeHtml(View.formatReportCount(item.value || item.averageDays || item.avgDays || 0)) + "</strong></div></div></section></div>";
+            }).join("")
+          : "<div class='col-12'><div class='report-empty-state'>No turnaround analytics available.</div></div>";
+      }
+
+      var buildSimpleBars = function(items, emptyMessage, accentClass) {
+        items = Array.isArray(items) ? items : [];
+        if (!items.length) return "<div class='report-empty-state'>" + emptyMessage + "</div>";
+        var max = items.reduce(function(best, item) {
+          return Math.max(best, Number(item.value || item.count || item.total || 0));
+        }, 0) || 1;
+        return items.map(function(item) {
+          var value = Number(item.value || item.count || item.total || 0);
+          var width = Math.max(8, Math.round((value / max) * 100));
+          return "<div class='report-bar-row'><div class='report-bar-text'><span class='report-bar-label'>" + View.escapeHtml(item.label || item.status || item.owner || item.month || item.location || "-") + "</span><strong class='report-bar-value'>" + View.escapeHtml(View.formatReportCount(value)) + "</strong></div><div class='report-bar-track'><span class='report-bar-fill " + accentClass + "' style='width:" + width + "%'></span></div></div>";
+        }).join("");
+      };
+
+      if (dom.locationLoadList) dom.locationLoadList.innerHTML = buildSimpleBars(locationRows, "No location load data available.", "report-bar-fill-hei");
+      if (dom.monthlyList) dom.monthlyList.innerHTML = buildSimpleBars(monthlyRows, "No monthly volume data available.", "report-bar-fill-progress");
+      if (dom.slaList) dom.slaList.innerHTML = buildSimpleBars(slaRows, "No SLA exposure data available.", "report-bar-fill-status");
+      if (dom.backlogList) dom.backlogList.innerHTML = buildSimpleBars(backlogRows, "No workflow backlog data available.", "report-bar-fill-assigned");
+
+      if (dom.productivityList) {
+        dom.productivityList.innerHTML = productivityRows.length
+          ? "<div class='table-responsive'><table class='table table-hover align-middle mb-0 analytics-table'><thead><tr><th>Assigned Staff</th><th>Total Handled</th></tr></thead><tbody>" +
+            productivityRows.map(function(item) {
+              return "<tr><td><button type='button' class='analytics-link-button'>" + View.escapeHtml(item.person || item.staff || "-") + "</button></td><td>" + View.escapeHtml(View.formatReportCount(item.totalHandled || item.total || 0)) + "</td></tr>";
+            }).join("") +
+            "</tbody></table></div>"
+          : "<div class='report-empty-state'>No staff activity data available.</div>";
+      }
+    },
+
+    renderEmpty: function(message) {
+      var dom = Model.dashboard.dom || {};
+      var text = View.escapeHtml(message || "No dashboard data available.");
+      if (dom.kpiGrid) dom.kpiGrid.innerHTML = "<div class='dashboard-empty-state'>" + text + "</div>";
+      if (dom.workloadList) dom.workloadList.innerHTML = "";
+      if (dom.programsList) dom.programsList.innerHTML = "";
+      if (dom.statusList) dom.statusList.innerHTML = "";
+      if (dom.progressionList) dom.progressionList.innerHTML = "";
+      if (dom.turnaroundSummary) dom.turnaroundSummary.innerHTML = "";
+      if (dom.turnaroundHighlights) dom.turnaroundHighlights.innerHTML = "";
+      if (dom.turnaroundList) dom.turnaroundList.innerHTML = "";
+      if (dom.locationLoadList) dom.locationLoadList.innerHTML = "";
+      if (dom.monthlyList) dom.monthlyList.innerHTML = "";
+      if (dom.slaList) dom.slaList.innerHTML = "";
+      if (dom.backlogList) dom.backlogList.innerHTML = "";
+      if (dom.productivityList) dom.productivityList.innerHTML = "";
+    },
+
+    renderError: function(error) {
+      var dom = Model.dashboard.dom || {};
+      this.renderEmpty(error || "Dashboard data unavailable");
+      if (dom.meta) dom.meta.textContent = error || "Dashboard data unavailable";
     }
   },
 
   renderDashboardModule: function(data) {
-    if (Model.activeModule !== "dashboard") return;
-    var container = this.getEl("dashboardHomeContent");
-    var issuanceHome = this.getEl("issuanceHomeContent");
-    var typingHome = this.getEl("typingHomeContent");
-    var kpiGrid = this.getEl("dashboardKpiGrid");
-    var workloadList = this.getEl("dashboardWorkloadList");
-    var programsList = this.getEl("dashboardProgramsList");
-    var statusList = this.getEl("dashboardStatusList");
-    var progressionList = this.getEl("dashboardProgressionList");
-    var turnaroundSummaryList = this.getEl("dashboardTurnaroundSummary");
-    var turnaroundList = this.getEl("dashboardTurnaroundList");
-    var locationLoadList = this.getEl("dashboardLocationLoadList");
-    var monthlyList = this.getEl("dashboardMonthlyList");
-    var slaList = this.getEl("dashboardSlaList");
-    var backlogList = this.getEl("dashboardBacklogList");
-    var productivityList = this.getEl("dashboardProductivityList");
-    var meta = this.getEl("dashboardMeta");
-
-    if (!container) return;
-    if (issuanceHome) issuanceHome.classList.add("d-none");
-    if (typingHome) typingHome.classList.add("d-none");
-    container.classList.remove("d-none");
-    container.style.display = "";
-
-    if (!data && Model.dashboard.isLoading) {
-      if (kpiGrid) {
-        kpiGrid.innerHTML = "<div class='dashboard-empty-state'>Loading dashboard data...</div>";
-      }
-      if (workloadList) workloadList.innerHTML = "";
-      if (programsList) programsList.innerHTML = "";
-      if (statusList) statusList.innerHTML = "";
-      if (progressionList) progressionList.innerHTML = "";
-      if (turnaroundSummaryList) turnaroundSummaryList.innerHTML = "";
-      if (turnaroundList) turnaroundList.innerHTML = "";
-      if (locationLoadList) locationLoadList.innerHTML = "";
-      if (monthlyList) monthlyList.innerHTML = "";
-      if (slaList) slaList.innerHTML = "";
-      if (backlogList) backlogList.innerHTML = "";
-      if (productivityList) productivityList.innerHTML = "";
-      if (meta) meta.textContent = "Loading analytics...";
-      console.log("[MODULE DASHBOARD] render complete");
-      return;
+    if (typeof DashboardView !== "undefined" && DashboardView && typeof DashboardView.render === "function") {
+      return DashboardView.render.apply(DashboardView, arguments);
     }
-
-    if (!data || data.error) {
-      if (kpiGrid) {
-        kpiGrid.innerHTML = "<div class='dashboard-empty-state'>" + this.escapeHtml((data && data.error) || "No dashboard data available.") + "</div>";
-      }
-      if (workloadList) workloadList.innerHTML = "";
-      if (programsList) programsList.innerHTML = "";
-      if (statusList) statusList.innerHTML = "";
-      if (progressionList) progressionList.innerHTML = "";
-      if (turnaroundSummaryList) turnaroundSummaryList.innerHTML = "";
-      if (turnaroundList) turnaroundList.innerHTML = "";
-      if (locationLoadList) locationLoadList.innerHTML = "";
-      if (monthlyList) monthlyList.innerHTML = "";
-      if (slaList) slaList.innerHTML = "";
-      if (backlogList) backlogList.innerHTML = "";
-      if (productivityList) productivityList.innerHTML = "";
-      if (meta) meta.textContent = "Dashboard data unavailable";
-      console.log("[MODULE DASHBOARD] render complete");
-      return;
-    }
-
-    var kpis = (data && typeof data === "object" && data.kpis && typeof data.kpis === "object") ? data.kpis : {};
-    var workloadRows = Array.isArray(data.workloadSummary) ? data.workloadSummary : [];
-    var statusRows = Array.isArray(data.statusDistribution) ? data.statusDistribution : [];
-    var turnaround = (data && typeof data === "object" && data.turnaroundAnalytics && typeof data.turnaroundAnalytics === "object") ? data.turnaroundAnalytics : {};
-    var turnaroundRows = Array.isArray(turnaround.rows) ? turnaround.rows : [];
-    var turnaroundSummary = (turnaround.summary && typeof turnaround.summary === "object") ? turnaround.summary : {};
-    var summaryFallback = Number(kpis.totalRecords || 0);
-
-    if (kpiGrid) {
-      kpiGrid.innerHTML = [
-        { label: "Total Records", value: kpis.totalRecords || 0 },
-        { label: "Released", value: kpis.releasedCount || 0 },
-        { label: "Pending", value: kpis.pendingCount || 0 },
-        { label: "Average Age (Days)", value: kpis.averageAgeDays || 0 }
-      ].map(function(item) {
-        return "<article class='dashboard-kpi-card'>" +
-          "<span class='dashboard-kpi-label'>" + View.escapeHtml(item.label) + "</span>" +
-          "<strong class='dashboard-kpi-value'>" + View.escapeHtml(item.value) + "</strong>" +
-        "</article>";
-      }).join("");
-    }
-
-    if (workloadList) {
-      workloadList.innerHTML = workloadRows.length
-        ? "<div class='table-responsive'><table class='table table-hover align-middle mb-0 analytics-table'><thead><tr><th>ES II Owner</th><th>Total</th></tr></thead><tbody>" +
-          workloadRows.map(function(item) {
-            return "<tr><td><button type='button' class='analytics-link-button'>" + View.escapeHtml(item.label || item.owner || "-") + "</button></td><td>" + View.escapeHtml(item.value || item.total || 0) + "</td></tr>";
-          }).join("") +
-          "</tbody></table></div>"
-        : "<div class='report-empty-state'>No workload data available.</div>";
-    }
-
-    if (programsList) {
-      var derivedPrograms = workloadRows.slice(0, 10).map(function(item, index) {
-        return {
-          rank: index + 1,
-          label: item.label || item.owner || "-",
-          value: item.value || item.total || 0
-        };
-      });
-      programsList.innerHTML = derivedPrograms.length
-        ? "<div class='report-ranked-list report-scroll-body'>" +
-          derivedPrograms.map(function(item) {
-            return "<div class='ranked-list-item'><span class='ranked-list-rank'>#" + View.escapeHtml(item.rank) + "</span><div class='ranked-list-body'><span class='ranked-list-name'>" + View.escapeHtml(item.label) + "</span><strong class='ranked-list-value'>" + View.escapeHtml(item.value) + "</strong></div></div>";
-          }).join("") +
-          "</div>"
-        : "<div class='report-empty-state'>No program analytics available.</div>";
-    }
-
-    if (statusList) {
-      statusList.innerHTML = statusRows.length
-        ? statusRows.map(function(item) {
-            return "<div class='dashboard-list-row'>" +
-              "<span class='dashboard-list-label'>" + View.escapeHtml(item.label || item.status || "-") + "</span>" +
-              "<strong class='dashboard-list-value'>" + View.escapeHtml(item.value || item.count || 0) + "</strong>" +
-            "</div>";
-          }).join("")
-        : "<div class='report-empty-state'>No status distribution available.</div>";
-    }
-
-    if (progressionList) {
-      progressionList.innerHTML = statusRows.length
-        ? statusRows.map(function(item) {
-            var value = Number(item.value || item.count || 0);
-            var width = Math.max(8, Math.min(100, value > 0 && summaryFallback ? Math.round((value / Math.max(summaryFallback, value)) * 100) : 8));
-            return "<div class='report-bar-row'>" +
-              "<div class='report-bar-text'>" +
-                "<span class='report-bar-label'>" + View.escapeHtml(item.label || item.status || "-") + "</span>" +
-                "<strong class='report-bar-value'>" + View.escapeHtml(value) + "</strong>" +
-              "</div>" +
-              "<div class='report-bar-track'><span class='report-bar-fill report-bar-fill-status' style='width:" + width + "%'></span></div>" +
-            "</div>";
-          }).join("")
-        : "<div class='report-empty-state'>No status progression available.</div>";
-    }
-
-    if (turnaroundSummaryList) {
-      var summaryCards = [
-        { label: "Eligible Records", value: turnaroundSummary.eligibleRecords || turnaroundSummary.totalEligible || 0 },
-        { label: "Average Total Days", value: turnaroundSummary.averageDays || turnaroundSummary.avgDays || 0 },
-        { label: "Median Total Days", value: turnaroundSummary.medianDays || 0 }
-      ];
-      turnaroundSummaryList.innerHTML = summaryCards.map(function(item) {
-        return "<div class='report-stat-card turnaround-stat-card h-100'><span class='report-stat-label'>" + View.escapeHtml(item.label) + "</span><strong class='report-stat-value'>" + View.escapeHtml(item.value) + "</strong></div>";
-      }).join("");
-    }
-
-    if (turnaroundList) {
-      turnaroundList.innerHTML = turnaroundRows.length
-        ? turnaroundRows.map(function(item) {
-            return "<div class='col-12 col-xxl-6'><section class='report-card report-card-compact h-100'><div class='d-flex justify-content-between align-items-start gap-3 mb-3'><div><div class='report-placeholder-kicker'>Evaluation Status</div><h4 class='mb-1'>" + View.escapeHtml(item.label || item.bucket || "-") + "</h4></div><div class='text-end'><div class='report-stat-label'>Eligible Records</div><strong class='report-stat-value fs-5'>" + View.escapeHtml(item.count || item.sampleCount || 0) + "</strong></div></div><div class='dashboard-mini-metric-grid'><div class='dashboard-mini-metric'><span>Average Business Days</span><strong>" + View.escapeHtml(item.value || item.averageDays || 0) + "</strong></div></div></section></div>";
-          }).join("")
-        : "<div class='col-12'><div class='report-empty-state'>No turnaround analytics available.</div></div>";
-    }
-
-    var buildSimpleBars = function(items, emptyMessage, accentClass) {
-      items = Array.isArray(items) ? items : [];
-      if (!items.length) return "<div class='report-empty-state'>" + emptyMessage + "</div>";
-      var max = items.reduce(function(best, item) {
-        return Math.max(best, Number(item.value || item.count || item.total || 0));
-      }, 0) || 1;
-      return items.map(function(item) {
-        var value = Number(item.value || item.count || item.total || 0);
-        var width = Math.max(8, Math.round((value / max) * 100));
-        return "<div class='report-bar-row'>" +
-          "<div class='report-bar-text'><span class='report-bar-label'>" + View.escapeHtml(item.label || item.status || item.owner || "-") + "</span><strong class='report-bar-value'>" + View.escapeHtml(value) + "</strong></div>" +
-          "<div class='report-bar-track'><span class='report-bar-fill " + accentClass + "' style='width:" + width + "%'></span></div>" +
-        "</div>";
-      }).join("");
-    };
-
-    if (locationLoadList) {
-      locationLoadList.innerHTML = buildSimpleBars(workloadRows, "No location load data available.", "report-bar-fill-hei");
-    }
-
-    if (monthlyList) {
-      monthlyList.innerHTML = buildSimpleBars(statusRows, "No monthly volume data available.", "report-bar-fill-progress");
-    }
-
-    if (slaList) {
-      slaList.innerHTML = buildSimpleBars(statusRows.slice(0, 2), "No SLA exposure data available.", "report-bar-fill-status");
-    }
-
-    if (backlogList) {
-      backlogList.innerHTML = buildSimpleBars(statusRows, "No workflow backlog data available.", "report-bar-fill-assigned");
-    }
-
-    if (productivityList) {
-      productivityList.innerHTML = workloadRows.length
-        ? "<div class='table-responsive'><table class='table table-hover align-middle mb-0 analytics-table'><thead><tr><th>Assigned Staff</th><th>Total Handled</th></tr></thead><tbody>" +
-          workloadRows.map(function(item) {
-            return "<tr><td><button type='button' class='analytics-link-button'>" + View.escapeHtml(item.label || item.owner || "-") + "</button></td><td>" + View.escapeHtml(item.value || item.total || 0) + "</td></tr>";
-          }).join("") +
-          "</tbody></table></div>"
-        : "<div class='report-empty-state'>No staff activity data available.</div>";
-    }
-
-    if (meta) {
-      meta.textContent = "Source: " + this.escapeHtml((data.meta && data.meta.source) || "BigQuery") +
-        " | Loaded: " + this.escapeHtml((data.meta && data.meta.loadedAt) || "");
-    }
-    console.log("[MODULE DASHBOARD] render complete");
-  },
-
-  openTypingEditModal: function() {
-    var modal = this.getEl("typingEditModal");
-    if (modal) modal.classList.add("show");
   },
 
   closeTypingEditModal: function() {
-    var modal = this.getEl("typingEditModal");
-    if (modal) modal.classList.remove("show");
-    this.clearTypingValidationErrors();
+    if (typeof TypingView !== "undefined" && TypingView && typeof TypingView.closeEditModal === "function") {
+      return TypingView.closeEditModal.apply(TypingView, arguments);
+    }
   },
 
   clearTypingValidationErrors: function() {
-    ["temp_date_received", "temp_student_name", "temp_hei", "temp_program", "temp_date_graduation"].forEach(function(id) {
-      View.clearModalFieldError(id);
-    });
-    var actionError = this.getEl("typingSaveActionError");
-    if (actionError) actionError.textContent = "";
+    if (typeof TypingView !== "undefined" && TypingView && typeof TypingView.clearValidationErrors === "function") {
+      return TypingView.clearValidationErrors.apply(TypingView, arguments);
+    }
   },
 
   setFieldInteractivity: function(id, enabled, readOnly) {

@@ -40,10 +40,9 @@ var Model = {
     access: "",
     modules: []
   },
-  activeModule: null,
   executionLock: {
-    activeModule: null,
-    requestId: 0
+    activeModule: "issuance",
+    requestId: 1
   },
   serviceContext: {
     module: null,
@@ -51,26 +50,47 @@ var Model = {
     source: null,
     timestamp: null
   },
+  dom: {},
+  dashboardRequestToken: 0,
+  beginDashboardRequest: function() {
+    this.dashboardRequestToken += 1;
+    return this.dashboardRequestToken;
+  },
+  isActiveDashboardRequest: function(token) {
+    return Number(token) === Number(this.dashboardRequestToken);
+  },
+  resetFilters: function() {
+    this.filters = {
+      searchTerm: "",
+      status: "all",
+      dateFrom: "",
+      dateTo: "",
+      datePreset: "thisYear",
+      es2InCharge: "ALL",
+      program: "ALL",
+      applicationStatus: "ALL",
+      transactionType: "ALL",
+      hei: "ALL"
+    };
+  },
+  resetData: function() {
+    this.issuance.fullData = [];
+    this.issuance.filteredData = [];
+    this.issuance.batchStudents = [];
+    this.issuance.editingRowID = null;
+  },
+  getVerificationCategory: function(status) {
+    var s = String(status || "").toLowerCase();
+    if (s.indexOf("verified") !== -1 && s.indexOf("unverified") === -1) return "verified";
+    if (s.indexOf("deficiency") !== -1) return "deficiency";
+    return "unverified";
+  },
   issuance: {
     fullData: [],
     filteredData: [],
     batchStudents: [],
     editingRowID: null,
     lastFocusedStudentRow: null
-  },
-  typing: {
-    batchId: null,
-    students: [],
-    isSaving: false,
-    progress: {
-      total: 0,
-      saved: 0,
-      failed: 0
-    }
-  },
-  dashboard: {
-    data: null,
-    isLoading: false
   },
   accessContext: {
     email: "",
@@ -132,23 +152,11 @@ var Model = {
 
   assertModuleStateIsolation: function() {
     if (!this.issuance || typeof this.issuance !== "object") this.issuance = {};
-    if (!this.typing || typeof this.typing !== "object") this.typing = {};
-    if (!this.dashboard || typeof this.dashboard !== "object") this.dashboard = {};
-
     this.issuance.fullData = Array.isArray(this.fullData) ? this.fullData.slice() : [];
     this.issuance.filteredData = Array.isArray(this.filteredData) ? this.filteredData.slice() : [];
     this.issuance.batchStudents = Array.isArray(this.batchStudents) ? this.batchStudents.slice() : [];
     this.issuance.editingRowID = this.editingRowID;
     this.issuance.lastFocusedStudentRow = this.lastFocusedStudentRow;
-
-    if (!Array.isArray(this.typing.students)) this.typing.students = [];
-    if (!this.typing.progress || typeof this.typing.progress !== "object") {
-      this.typing.progress = { total: 0, saved: 0, failed: 0 };
-    }
-    if (!Object.prototype.hasOwnProperty.call(this.dashboard, "data")) this.dashboard.data = null;
-    if (!Object.prototype.hasOwnProperty.call(this.dashboard, "isLoading")) this.dashboard.isLoading = false;
-
-    console.log("[MODULE STATE] Isolation check passed");
     return true;
   },
 

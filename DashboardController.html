@@ -1,0 +1,301 @@
+<script>
+// Polyfill for Object.assign (Google Apps Script compatibility)
+if (typeof Object.assign !== 'function') {
+  Object.assign = function(target) {
+    if (target == null) throw new TypeError('Cannot convert undefined or null to object');
+    var to = Object(target);
+    for (var index = 1; index < arguments.length; index++) {
+      var nextSource = arguments[index];
+      if (nextSource != null) {
+        for (var nextKey in nextSource) {
+          if (Object.prototype.hasOwnProperty.call(nextSource, nextKey)) {
+            to[nextKey] = nextSource[nextKey];
+          }
+        }
+      }
+    }
+    return to;
+  };
+}
+
+var Controller = {
+  executeDashboardRequest: function(requestToken, runRequest, uiMessage) {
+    var that = this;
+    runRequest(function(payload) {
+      if (!Model.isActiveDashboardRequest(requestToken)) return;
+      
+      // DEEP VALIDATION: Ensure payload is an object and not null
+      if (!payload || typeof payload !== 'object') {
+        console.error("[CONTROLLER] Invalid payload type received:", typeof payload);
+        that.handleDashboardFailure({ message: "Empty or invalid response from server." }, requestToken);
+        return;
+      }
+      
+      // UNWRAP: Handle Success-wrapped payloads or direct payloads
+      var data = payload.handled ? payload.data : payload;
+      
+      if (!data || (data.ok === false && !data.summary)) {
+        console.error("[CONTROLLER] Payload data validation failed:", data);
+        that.handleDashboardFailure(data.error || { message: "Dashboard data structure is invalid." }, requestToken);
+        return;
+      }
+
+      Controller.handleDashboardSuccess(data, requestToken);
+    }, function(error) {
+      if (!Model.isActiveDashboardRequest(requestToken)) return;
+      console.error("[CONTROLLER] RPC Error:", error);
+      Controller.handleDashboardFailure(error, requestToken);
+    });
+  },
+
+  queueBackgroundBatchLoad: function(startRow) {
+    if (!startRow) return;
+    window.requestAnimationFrame(function() {
+      window.setTimeout(function() {
+        if (!Model.loadingBatches) return;
+        Controller.loadRemainingDashboardData(startRow);
+      }, 120);
+    });
+  },
+
+  init: function() {
+    View.cacheDom();
+    View.bindStaticUi();
+    Model.resetFilters();
+    Model.resetData();
+    View.setFiltersLocked(true);
+    this.loadNavbarLogo();
+    View.renderLoadingState("Loading analytics...");
+    this.loadDashboard();
+  },
+
+  loadNavbarLogo: function() {
+    var shell = document.getElementById("navbarLogoShell");
+    var logoImage = document.getElementById("navbarLogoImage");
+    var fallback = document.getElementById("navbarLogoFallback");
+    var loading = document.getElementById("navbarLogoLoading");
+
+    if (shell) {
+      shell.classList.add("is-loading");
+      shell.classList.remove("is-ready");
+    }
+    if (loading) loading.classList.remove("d-none");
+    if (fallback) fallback.classList.remove("d-none");
+
+    Service.getNavbarLogoData(function(result) {
+      // Correctly handle the result which might be wrapped or direct
+      var logoData = result && result.data ? result.data : result;
+      var dataUrl = logoData && logoData.dataUrl ? String(logoData.dataUrl).trim() : "";
+
+      if (!dataUrl) {
+        console.warn("[CONTROLLER] No logo dataUrl received");
+        if (shell) shell.classList.remove("is-loading");
+        if (loading) loading.classList.add("d-none");
+        if (logoImage) {
+          logoImage.onload = null;
+          logoImage.onerror = null;
+          logoImage.removeAttribute("src");
+          logoImage.classList.add("d-none");
+        }
+        if (fallback) fallback.classList.remove("d-none");
+        return;
+      }
+
+      if (!logoImage) {
+        console.error("[CONTROLLER] navbarLogoImage element not found");
+        if (shell) shell.classList.remove("is-loading");
+        if (loading) loading.classList.add("d-none");
+        return;
+      }
+
+      logoImage.onload = function() {
+        console.info("[CONTROLLER] Navbar logo image LOADED successfully");
+        if (shell) {
+          shell.classList.remove("is-loading");
+          shell.classList.add("is-ready");
+        }
+        if (loading) loading.classList.add("d-none");
+        if (fallback) fallback.classList.add("d-none");
+        logoImage.classList.remove("d-none");
+      };
+
+      logoImage.onerror = function() {
+        console.error("[CONTROLLER] Navbar logo image failed to load");
+        if (shell) shell.classList.remove("is-loading");
+        if (loading) loading.classList.add("d-none");
+        logoImage.removeAttribute("src");
+        logoImage.classList.add("d-none");
+        if (fallback) fallback.classList.remove("d-none");
+      };
+
+      logoImage.src = dataUrl;
+    }, function(error) {
+      console.error("[CONTROLLER] getNavbarLogoData RPC FAILED:", error);
+      if (shell) shell.classList.remove("is-loading");
+      if (logoImage) {
+        logoImage.onload = null;
+        logoImage.onerror = null;
+        logoImage.removeAttribute("src");
+        logoImage.classList.add("d-none");
+      }
+      if (loading) loading.classList.add("d-none");
+      if (fallback) fallback.classList.remove("d-none");
+    });
+  },
+
+  loadDashboard: function() {
+    var requestToken = Model.beginDashboardRequest();
+    this.executeDashboardRequest(requestToken, function(onSuccess, onFailure) {
+      Service.getDashboardData(onSuccess, onFailure);
+    }, "Loading analytics...");
+  },
+
+  handleDashboardSuccess: function(data, requestToken) {
+    if (requestToken && !Model.isActiveDashboardRequest(requestToken)) return;
+    
+    console.info("[CONTROLLER] Success payload received. Records:", data.summary ? data.summary.totalRecords : "N/A");
+    
+    // Force set ok if we have summary data
+    if (data.summary && data.ok === undefined) data.ok = true;
+
+    Model.hydrateFromPayload(data, true);
+    Model.loadingBatches = false;
+    View.setFiltersLocked(false);
+    View.setFilterBusy(false);
+    View.setRefreshBusy(false);
+    View.setLoadingMore(false);
+    View.renderDashboard(data, true);
+  },
+
+  handleDashboardFailure: function(error, requestToken) {
+    if (requestToken && !Model.isActiveDashboardRequest(requestToken)) return;
+    console.error("Executive Dashboard render failure:", error);
+    Model.loadingBatches = false;
+    View.setFiltersLocked(false);
+    View.setFilterBusy(false);
+    View.setRefreshBusy(false);
+    View.setLoadingMore(false);
+    View.renderFailure("Dashboard loading failed.");
+  },
+
+  handleFilterDraftChange: function() {
+    Model.updateDraftFilters(View.readFilters());
+    Model.sanitizeFilters();
+    Model.updateDraftFilters(Model.filters);
+    View.syncDateFilterMode();
+    View.populateFilters(Model.filterOptions);
+  },
+
+  handleApplyFilters: function() {
+    if (!Model.hasPendingFilterChanges) return;
+    var requestFilters = Object.assign({}, Model.filters);
+    console.info("Executive Dashboard filters applied:", requestFilters);
+    View.setFilterBusy(true, "Applying filters...");
+    var requestToken = Model.beginDashboardRequest();
+    this.executeDashboardRequest(requestToken, function(onSuccess, onFailure) {
+      Service.getAnalyticsData(requestFilters, onSuccess, onFailure);
+    }, "Applying filters...");
+  },
+
+  handleClearFilters: function() {
+    Model.resetFilters(false);
+    View.populateFilters(Model.filterOptions);
+    View.syncDateFilterMode();
+    View.setFilterBusy(true, "Resetting analytics...");
+    var requestFilters = Object.assign({}, Model.filters);
+    var requestToken = Model.beginDashboardRequest();
+    this.executeDashboardRequest(requestToken, function(onSuccess, onFailure) {
+      Service.getAnalyticsData(requestFilters, onSuccess, onFailure);
+    }, "Resetting analytics...");
+  },
+
+  handleMonthlyYearChange: function() {
+    if (Model.dom.monthlyYearSelect) {
+      Model.monthlyYear = Model.dom.monthlyYearSelect.value || "";
+    }
+    View.renderMonthlyVolume({ rows: Model.monthlyVolumeRows || [] });
+  },
+
+  handleRefresh: function() {
+    Model.resetFilters();
+    Model.resetData();
+    View.setFiltersLocked(true);
+    View.setRefreshBusy(true);
+    View.setLoadingMore(false);
+    View.renderLoadingState("Refreshing analytics...");
+    var requestToken = Model.beginDashboardRequest();
+    this.executeDashboardRequest(requestToken, function(onSuccess, onFailure) {
+      Service.refreshDashboardCache(function(payload) {
+        if (!Model.isActiveDashboardRequest(requestToken)) return;
+        View.setRefreshBusy(false);
+        onSuccess(payload);
+      }, function(error) {
+        if (!Model.isActiveDashboardRequest(requestToken)) return;
+        View.setRefreshBusy(false);
+          onFailure(error);
+        });
+      }, "Refreshing analytics...");
+  },
+
+  loadRemainingDashboardData: function(startRow) {
+    return;
+  },
+
+  getHistoricalLoadingMessage: function() {
+    return "Loading historical data";
+  },
+
+  openOwnerModal: function(ownerName) {
+    if (!ownerName) return;
+    this.queueModalRender("ES II Owner", ownerName, 1);
+  },
+
+  openStatusModal: function(statusLabel) {
+    if (!statusLabel) return;
+    this.queueModalRender("Application Status", statusLabel, 1);
+  },
+
+  openStaffModal: function(personName) {
+    if (!personName) return;
+    this.queueModalRender("Assigned Staff", personName, 1);
+  },
+
+  handleModalPreviousPage: function() {
+    if (!Model.modalState.detail) return;
+    var targetPage = Math.max(1, Number(Model.modalState.currentPage || 1) - 1);
+    this.queueModalRender(Model.modalState.detail.kind, Model.modalState.detail.name, targetPage);
+  },
+
+  handleModalNextPage: function() {
+    if (!Model.modalState.detail) return;
+    var targetPage = Math.min(Number(Model.modalState.detail.pageCount || 1), Number(Model.modalState.currentPage || 1) + 1);
+    this.queueModalRender(Model.modalState.detail.kind, Model.modalState.detail.name, targetPage);
+  },
+
+  queueModalRender: function(kind, name, page) {
+    var requestToken = Model.beginModalRequest();
+    View.renderDetailModalLoading(kind, name);
+    Service.getDashboardDetail(kind, name, Model.appliedFilters, page || 1, Model.modalState.pageSize, function(payload) {
+      if (!payload || payload.ok === false) {
+        console.error("Executive Dashboard detail payload failure:", payload);
+        if (!Model.isActiveModalRequest(requestToken)) return;
+        Model.modalState.loading = false;
+        View.renderDetailModalPagination({ page: page || 1, pageCount: 1 });
+        return;
+      }
+      if (!Model.isActiveModalRequest(requestToken)) return;
+      Model.setModalDetail(payload.detail);
+      if (!Model.isActiveModalRequest(requestToken) || !Model.modalState.detail) return;
+      View.renderDetailModal(Model.modalState.detail);
+    }, function(error) {
+      console.error("Executive Dashboard detail failure:", error);
+      if (!Model.isActiveModalRequest(requestToken)) return;
+      Model.modalState.loading = false;
+    });
+  }
+};
+
+document.addEventListener("DOMContentLoaded", function() {
+  Controller.init();
+});
+</script>

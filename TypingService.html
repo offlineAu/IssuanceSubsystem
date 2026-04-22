@@ -1,0 +1,127 @@
+<script>
+var TypingService = {
+  getInitialData: function(batchSize, onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).routeModule("typing", "getInitialData", { batchSize: batchSize });
+  },
+
+  loadRemainingData: function(startRow, batchSize, onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).routeModule("typing", "loadRemainingData", { startRow: startRow, batchSize: batchSize });
+  },
+
+  searchExactName: function(term, onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).routeModule("typing", "searchExactName", { searchTerm: term });
+  },
+
+  getSavedSoPrefixes: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).routeModule("typing", "getSavedSoPrefixes", {});
+  },
+
+  saveSoPrefix: function(prefix, onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).routeModule("typing", "saveSoPrefix", { prefix: prefix });
+  },
+
+  updateIssuanceColumns: function(payload, onSuccess, onFailure) {
+    google.script.run
+      .withSuccessHandler(onSuccess)
+      .withFailureHandler(onFailure)
+      .routeModule("typing", "updateIssuanceColumns", payload);
+  },
+
+  updateTempRecordEntry: function(payload, onSuccess, onFailure) {
+    google.script.run
+      .withSuccessHandler(onSuccess)
+      .withFailureHandler(onFailure)
+      .routeModule("typing", "updateTempRecordEntry", payload);
+  },
+
+  updateTempRecordEntries: function(payloads, batchId, onSuccess, onFailure) {
+    google.script.run
+      .withSuccessHandler(onSuccess)
+      .withFailureHandler(onFailure)
+      .routeModule("typing", "updateTempRecordEntries", { dataList: payloads, batchId: batchId });
+  },
+
+  createBatch: function(payload) {
+    return new Promise(function(resolve, reject) {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)
+        .routeModule("typing", "createBatch", payload);
+    });
+  },
+
+  getSaveBatchProgress: function(batchId, onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.routeModule("typing", "getSaveBatchProgress", { batchId: batchId });
+  },
+
+  getTempRecordPrefill: function(rowNumber, dateReceived, onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.routeModule("typing", "getTempRecordPrefill", { rowNumber: rowNumber, dateReceived: dateReceived });
+  },
+
+  getAccountName: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getAccountName();
+  },
+
+  getUserRole: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getUserRole();
+  },
+
+  getUserAccessContext: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getUserAccessContext();
+  },
+
+  getCurrentUserDebugInfo: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getCurrentUserDebugInfo();
+  },
+
+  getUserPositionFieldSchema: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getUserPositionFieldSchema();
+  },
+
+  getNavbarLogoData: function(onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.getNavbarLogoData();
+  },
+
+  getDatabaseRowUpdateInfo: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getDatabaseRowInfo();
+  },
+
+  getDatabaseRow: function(rowNumber, onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.getDatabaseRow(rowNumber);
+  },
+
+  getIssuanceHistory: function(onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.routeModule("typing", "getIssuanceHistory", {});
+  },
+
+  getSaveFailureHistory: function(onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.routeModule("typing", "getSaveFailureHistory", {});
+  },
+
+  retryFailedSave: function(logRow, onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.routeModule("typing", "retryFailedSave", { logRow: logRow });
+  },
+
+  logClientSaveFailure: function(record, onSuccess, onFailure) {
+    var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.routeModule("typing", "logClientSaveFailure", { data: record });
+  }
+};
+
+var Service = TypingService;
+</script>

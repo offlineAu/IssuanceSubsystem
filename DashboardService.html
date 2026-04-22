@@ -1,0 +1,94 @@
+<script>
+var Service = {
+  initialRpcDelayMs: 500,
+  retryDelayMs: 1000,
+  maxRetryAttempts: 1,
+  hasDelayedInitialDashboardLoad: false,
+
+  runServerCall: function(methodName, args, onSuccess, onFailure) {
+    var that = this;
+    var parameters = Array.isArray(args) ? args.slice() : [];
+    
+    var invoke = function() {
+      if (!window.google || !google.script || !google.script.run) {
+        console.error("[SERVICE] Google Apps Script runtime NOT READY.");
+        if (onFailure) onFailure({ message: "Runtime not ready." });
+        return;
+      }
+
+      var successHandler = function(payload) {
+        // LOGGING: Critical for debugging 'Empty response'
+        console.log("[SERVICE] RPC Success:", methodName, payload ? "Payload received" : "NULL payload");
+        
+        if (!payload) {
+          console.error("[SERVICE] NULL response from server for action:", methodName);
+          if (onFailure) onFailure({ message: "Server returned null payload." });
+          return;
+        }
+        
+        if (onSuccess) onSuccess(payload);
+      };
+
+      var failureHandler = function(error) {
+        console.error("[SERVICE] RPC Failure:", methodName, error);
+        if (onFailure) onFailure(error);
+      };
+
+      // Ensure we are using the routeModule bridge
+      google.script.run
+        .withSuccessHandler(successHandler)
+        .withFailureHandler(failureHandler)
+        .routeModule("dashboard", methodName, parameters[0] || parameters);
+    };
+
+    invoke();
+  },
+
+  runServerCallWithInitialDelay: function(methodName, args, onSuccess, onFailure) {
+    if (this.hasDelayedInitialDashboardLoad) {
+      this.runServerCall(methodName, args, onSuccess, onFailure);
+      return;
+    }
+    this.hasDelayedInitialDashboardLoad = true;
+    window.setTimeout(function() {
+      Service.runServerCall(methodName, args, onSuccess, onFailure);
+    }, this.initialRpcDelayMs);
+  },
+
+  getDashboardData: function(onSuccess, onFailure) {
+    this.runServerCallWithInitialDelay("getDashboardData", [], onSuccess, onFailure);
+  },
+
+  getAnalyticsData: function(filters, onSuccess, onFailure) {
+    this.runServerCall("getAnalyticsData", [filters], onSuccess, onFailure);
+  },
+
+  refreshDashboardCache: function(onSuccess, onFailure) {
+    this.runServerCall("refreshDashboardCache", [], onSuccess, onFailure);
+  },
+
+  warmDashboardCaches: function(filterPayloads, onSuccess, onFailure) {
+    this.runServerCall("warmDashboardCaches", [filterPayloads], onSuccess, onFailure);
+  },
+
+  getNavbarLogoData: function(onSuccess, onFailure) {
+    this.runServerCall("getNavbarLogoData", [], onSuccess, onFailure);
+  },
+
+  loadRemainingDashboardData: function(filters, onSuccess, onFailure) {
+    this.runServerCall("loadRemainingDashboardData", [filters], onSuccess, onFailure);
+  },
+
+  getDashboardDetail: function(kind, name, filters, page, pageSize, onSuccess, onFailure) {
+    // Re-pack arguments for routeModule payload
+    var payload = {
+      kind: kind,
+      name: name,
+      filters: filters,
+      page: page,
+      pageSize: pageSize
+    };
+    this.runServerCall("getDashboardDetail", [payload], onSuccess, onFailure);
+  }
+};
+</script>

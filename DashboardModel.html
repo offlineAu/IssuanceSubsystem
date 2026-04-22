@@ -1,0 +1,876 @@
+<script>
+// Polyfill for Object.assign (Google Apps Script compatibility)
+if (typeof Object.assign !== 'function') {
+  Object.assign = function(target) {
+    if (target == null) throw new TypeError('Cannot convert undefined or null to object');
+    var to = Object(target);
+    for (var index = 1; index < arguments.length; index++) {
+      var nextSource = arguments[index];
+      if (nextSource != null) {
+        for (var nextKey in nextSource) {
+          if (Object.prototype.hasOwnProperty.call(nextSource, nextKey)) {
+            to[nextKey] = nextSource[nextKey];
+          }
+        }
+      }
+    }
+    return to;
+  };
+}
+
+function getArray(obj, path, fallback) {
+  var val = obj;
+  for (var i = 0; i < path.length; i++) {
+    if (val && typeof val === "object") val = val[path[i]];
+    else return fallback;
+  }
+  return Array.isArray(val) ? val : fallback;
+}
+
+function getObject(obj, path, fallback) {
+  var val = obj;
+  for (var i = 0; i < path.length; i++) {
+    if (val && typeof val === "object") val = val[path[i]];
+    else return fallback;
+  }
+  return val && typeof val === "object" ? val : fallback;
+}
+
+var Model = {
+  statusOrder: [
+    "For Evaluation",
+    "Evaluated",
+    "Deficiency",
+    "Approved",
+    "Verified",
+    "For Signature",
+    "For Release",
+    "Released",
+    "Cancelled"
+  ],
+  defaultFilters: {
+    program: "ALL",
+    es2InCharge: "ALL",
+    datePreset: "thisYear",
+    dateFrom: "",
+    dateTo: "",
+    applicationStatus: "ALL",
+    transactionType: "ALL",
+    hei: "ALL"
+  },
+  filters: {
+    program: "ALL",
+    es2InCharge: "ALL",
+    datePreset: "thisYear",
+    dateFrom: "",
+    dateTo: "",
+    applicationStatus: "ALL",
+    transactionType: "ALL",
+    hei: "ALL"
+  },
+  appliedFilters: {
+    program: "ALL",
+    es2InCharge: "ALL",
+    datePreset: "thisYear",
+    dateFrom: "",
+    dateTo: "",
+    applicationStatus: "ALL",
+    transactionType: "ALL",
+    hei: "ALL"
+  },
+  dom: {},
+  fullData: [],
+  filteredData: [],
+  totalRows: 0,
+  nextBatchStart: 0,
+  nextBatchSize: 20000,
+  initialBatchSize: 1000,
+  loadingBatches: false,
+  filtersLocked: false,
+  filterBusy: false,
+  hasPendingFilterChanges: false,
+  lastRequestId: "",
+  dashboardRequestToken: 0,
+  dashboardCachesWarmed: false,
+  monthlyYear: "",
+  monthlyVolumeRows: [],
+  modalState: {
+    detail: null,
+    loading: false,
+    requestToken: 0,
+    currentPage: 1,
+    pageSize: 25
+  },
+  referenceData: {
+    staticApplicationStatuses: [],
+    usersDirectory: [],
+    es2ProgramMap: {},
+    programOwnershipMap: {},
+    es2Owners: [],
+    transactionTypes: ["Walk-In", "Online"],
+    transactionTypeMap: {},
+    modalColumns: [],
+    availableYears: []
+  },
+  filterOptions: {
+    programs: [],
+    es2Owners: [],
+    applicationStatuses: [],
+    transactionTypes: [],
+    heis: [],
+    dateRange: { min: "", max: "" }
+  },
+
+  resetFilters: function(syncApplied) {
+    this.filters = Object.assign({}, this.defaultFilters);
+    if (syncApplied !== false) {
+      this.appliedFilters = Object.assign({}, this.defaultFilters);
+    }
+    this.hasPendingFilterChanges = JSON.stringify(this.filters) !== JSON.stringify(this.appliedFilters);
+  },
+
+  resetData: function() {
+    this.fullData = [];
+    this.filteredData = [];
+    this.totalRows = 0;
+    this.nextBatchStart = 0;
+    this.loadingBatches = false;
+    this.filtersLocked = false;
+    this.lastRequestId = "";
+    this.hasPendingFilterChanges = false;
+    this.dashboardRequestToken = 0;
+    this.dashboardCachesWarmed = false;
+    this.monthlyYear = "";
+    this.monthlyVolumeRows = [];
+    this.modalState = {
+      detail: null,
+      loading: false,
+      requestToken: 0,
+      currentPage: 1,
+      pageSize: 25
+    };
+    this.referenceData = {
+      staticApplicationStatuses: [],
+      usersDirectory: [],
+      es2ProgramMap: {},
+      programOwnershipMap: {},
+      es2Owners: [],
+      transactionTypes: ["Walk-In", "Online"],
+      transactionTypeMap: {},
+      modalColumns: [],
+      availableYears: []
+    };
+    this.filterOptions = {
+      programs: [],
+      es2Owners: [],
+      applicationStatuses: [],
+      transactionTypes: [],
+      heis: [],
+      dateRange: { min: "", max: "" }
+    };
+  },
+
+  hydrateFromPayload: function(payload, replaceData) {
+    var incomingRows = payload && payload.data && Array.isArray(payload.data.records) ? payload.data.records : [];
+    if (replaceData) this.fullData = incomingRows.slice();
+    else this.appendRows(incomingRows);
+
+    this.totalRows = payload && payload.meta ? Number(payload.meta.totalRecordCount || this.totalRows) : this.totalRows;
+    this.nextBatchStart = payload && payload.meta ? Number(payload.meta.nextStartRow || 0) : 0;
+    this.lastRequestId = payload && payload.meta && payload.meta.requestId ? payload.meta.requestId : this.lastRequestId;
+    this.referenceData.staticApplicationStatuses = getArray(payload, ["data", "staticApplicationStatuses"], this.referenceData.staticApplicationStatuses);
+    this.referenceData.usersDirectory = getArray(payload, ["data", "usersDirectory"], this.referenceData.usersDirectory);
+    this.referenceData.es2Owners = getArray(payload, ["data", "es2Owners"], this.referenceData.es2Owners);
+    this.referenceData.transactionTypes = getArray(payload, ["data", "transactionTypes"], this.referenceData.transactionTypes);
+    this.referenceData.modalColumns = getArray(payload, ["data", "modalColumns"], this.referenceData.modalColumns);
+    this.referenceData.availableYears = getArray(payload, ["data", "availableYears"], this.referenceData.availableYears);
+    this.referenceData.es2ProgramMap = getObject(payload, ["data", "es2ProgramMap"], this.referenceData.es2ProgramMap);
+    this.referenceData.programOwnershipMap = getObject(payload, ["data", "programOwnershipMap"], this.referenceData.programOwnershipMap);
+    this.referenceData.transactionTypeMap = getObject(payload, ["data", "transactionTypeMap"], this.referenceData.transactionTypeMap);
+    this.monthlyVolumeRows = getArray(payload, ["sections", "monthlyVolume", "rows"], this.monthlyVolumeRows);
+    this.appliedFilters = Object.assign({}, payload && payload.meta && payload.meta.appliedFilters ? payload.meta.appliedFilters : this.appliedFilters);
+    this.filters = Object.assign({}, this.appliedFilters);
+    this.hasPendingFilterChanges = false;
+    this.filteredData = this.applyFilters(this.fullData, this.appliedFilters);
+    this.filterOptions = payload && payload.filters ? payload.filters : this.buildFilterOptions(this.fullData, this.referenceData, this.filters);
+    this.filterOptions = this.getActiveFilterOptions();
+  },
+
+  updateDraftFilters: function(filters) {
+    this.filters = Object.assign({}, filters || this.defaultFilters);
+    this.hasPendingFilterChanges = JSON.stringify(this.filters) !== JSON.stringify(this.appliedFilters);
+  },
+
+  appendRows: function(rows) {
+    var existingRows = {};
+    this.fullData.forEach(function(row) {
+      existingRows[String(row._row)] = true;
+    });
+    rows.forEach(function(row) {
+      if (!existingRows[String(row._row)]) {
+        existingRows[String(row._row)] = true;
+        Model.fullData.push(row);
+      }
+    });
+  },
+
+  sanitizeFilters: function() {
+    var options = this.getActiveFilterOptions();
+    if (this.filters.es2InCharge !== "ALL" && options.es2Owners.indexOf(this.filters.es2InCharge) === -1) this.filters.es2InCharge = "ALL";
+    if (this.filters.program !== "ALL" && options.programs.indexOf(this.filters.program) === -1) this.filters.program = "ALL";
+    if (this.filters.transactionType !== "ALL" && options.transactionTypes.indexOf(this.filters.transactionType) === -1) this.filters.transactionType = "ALL";
+    if (this.filters.applicationStatus !== "ALL" && options.applicationStatuses.indexOf(this.filters.applicationStatus) === -1) this.filters.applicationStatus = "ALL";
+    if (this.filters.hei !== "ALL" && options.heis.indexOf(this.filters.hei) === -1) this.filters.hei = "ALL";
+    if (["thisYear", "yearToDate", "last30Days", "last90Days", "allTime", "specificDate"].indexOf(this.filters.datePreset) === -1) {
+      this.filters.datePreset = "allTime";
+    }
+    if (this.filters.datePreset !== "specificDate") {
+      this.filters.dateFrom = "";
+      this.filters.dateTo = "";
+    }
+    if (this.filters.datePreset === "specificDate" && this.filters.dateFrom && this.filters.dateTo && this.filters.dateTo < this.filters.dateFrom) {
+      this.filters.dateTo = this.filters.dateFrom;
+    }
+    this.filterOptions = options;
+  },
+
+  getActiveFilterOptions: function() {
+    if (this.fullData && this.fullData.length) {
+      return this.buildFilterOptions(this.fullData, this.referenceData, this.filters);
+    }
+    var selectedOwner = this.filters && this.filters.es2InCharge && this.filters.es2InCharge !== "ALL" ? this.filters.es2InCharge : "";
+    var selectedProgram = this.filters && this.filters.program && this.filters.program !== "ALL" ? this.filters.program : "";
+    var programOwnershipMap = this.referenceData.programOwnershipMap || {};
+    var basePrograms = Array.isArray(this.filterOptions.programs) ? this.filterOptions.programs.slice() : Object.keys(programOwnershipMap || {});
+    var baseOwners = Array.isArray(this.filterOptions.es2Owners) && this.filterOptions.es2Owners.length ? this.filterOptions.es2Owners.slice() : (this.referenceData.es2Owners || []).slice();
+    var ownedPrograms = Object.keys(programOwnershipMap).filter(function(program) {
+      return !selectedOwner || programOwnershipMap[program] === selectedOwner;
+    });
+    var programs = (basePrograms.length ? basePrograms : ownedPrograms).filter(function(program) {
+      if (selectedOwner && programOwnershipMap[program] && programOwnershipMap[program] !== selectedOwner) return false;
+      return !selectedProgram || program === selectedProgram || !selectedOwner;
+    }).sort();
+    if (selectedOwner && !programs.length) {
+      programs = ownedPrograms.sort();
+    }
+    var owners = baseOwners.filter(function(owner) {
+      if (!selectedProgram) return true;
+      return !programOwnershipMap[selectedProgram] || programOwnershipMap[selectedProgram] === owner;
+    });
+    if (!owners.length && selectedProgram && programOwnershipMap[selectedProgram]) {
+      owners = [programOwnershipMap[selectedProgram]];
+    }
+
+    return {
+      programs: programs,
+      es2Owners: owners,
+      applicationStatuses: Array.isArray(this.filterOptions.applicationStatuses) ? this.filterOptions.applicationStatuses.slice() : (this.referenceData.staticApplicationStatuses || []).slice(),
+      transactionTypes: Array.isArray(this.filterOptions.transactionTypes) && this.filterOptions.transactionTypes.length
+        ? this.filterOptions.transactionTypes.slice()
+        : (this.referenceData.transactionTypes || ["Walk-In", "Online"]).slice(),
+      heis: Array.isArray(this.filterOptions.heis) ? this.filterOptions.heis.slice().sort() : [],
+      dateRange: this.filterOptions.dateRange
+        ? { min: this.filterOptions.dateRange.min || "", max: this.filterOptions.dateRange.max || "" }
+        : { min: "", max: "" }
+    };
+  },
+
+  buildLocalPayload: function() {
+    this.filteredData = this.applyFilters(this.fullData, this.filters);
+    this.filterOptions = this.buildFilterOptions(this.fullData, this.referenceData, this.filters);
+    var aggregate = this.buildAggregate(this.filteredData);
+    return {
+      ok: true,
+      filters: this.filterOptions,
+      summary: this.buildSummary(aggregate),
+      sections: this.buildSections(aggregate),
+      meta: {
+        requestId: this.lastRequestId || "",
+        cacheStatus: "client-array",
+        cachedAt: new Date().toISOString(),
+        recordCount: this.filteredData.length,
+        loadedRecordCount: this.fullData.length,
+        totalRecordCount: this.totalRows || this.fullData.length,
+        isPartial: this.fullData.length < (this.totalRows || this.fullData.length),
+        nextStartRow: this.nextBatchStart || 0,
+        timings: {},
+        warnings: []
+      }
+    };
+  },
+
+  buildFilterOptions: function(records, referenceData, activeFilters) {
+    var programs = {};
+    var owners = {};
+    var statuses = {};
+    var heis = {};
+    var dates = [];
+    var selectedOwner = activeFilters && activeFilters.es2InCharge && activeFilters.es2InCharge !== "ALL" ? activeFilters.es2InCharge : "";
+    var hasOwnershipMap = Object.keys(referenceData.programOwnershipMap || {}).length > 0;
+
+    Object.keys(referenceData.programOwnershipMap || {}).forEach(function(program) {
+      if (!selectedOwner || referenceData.programOwnershipMap[program] === selectedOwner) programs[program] = true;
+    });
+
+    records.forEach(function(record) {
+      if (record.es2InCharge) owners[record.es2InCharge] = true;
+      if (record.statusValue) statuses[record.statusValue] = true;
+      if (record.hei) heis[record.hei] = true;
+      if (record.dateReceived) dates.push(record.dateReceived);
+      if (!hasOwnershipMap && (!selectedOwner || record.es2InCharge === selectedOwner)) {
+        if (record.program) programs[record.program] = true;
+      }
+    });
+
+    dates.sort();
+    if (activeFilters && activeFilters.program && activeFilters.program !== "ALL" && referenceData.programOwnershipMap && referenceData.programOwnershipMap[activeFilters.program]) {
+      owners = {};
+      owners[referenceData.programOwnershipMap[activeFilters.program]] = true;
+    }
+
+    return {
+      programs: Object.keys(programs).sort(),
+      es2Owners: Object.keys(owners).sort(),
+      applicationStatuses: Array.isArray(referenceData.staticApplicationStatuses) && referenceData.staticApplicationStatuses.length
+        ? referenceData.staticApplicationStatuses.slice()
+        : Object.keys(statuses).sort(),
+      transactionTypes: Array.isArray(referenceData.transactionTypes) && referenceData.transactionTypes.length
+        ? referenceData.transactionTypes.slice()
+        : ["Walk-In", "Online"],
+      heis: Object.keys(heis).sort(),
+      dateRange: {
+        min: dates.length ? dates[0] : "",
+        max: dates.length ? dates[dates.length - 1] : ""
+      }
+    };
+  },
+
+  applyFilters: function(records, filters) {
+    var programToken = this.normalizeToken(filters.program);
+    var es2Token = this.normalizeToken(filters.es2InCharge);
+    var statusToken = this.normalizeToken(filters.applicationStatus);
+    var transactionTypeToken = this.normalizeToken(filters.transactionType);
+    var heiToken = this.normalizeToken(filters.hei);
+    var datePreset = String(filters.datePreset || "allTime");
+    var dateFrom = filters.dateFrom || "";
+    var dateTo = filters.dateTo || "";
+    var presetRange = this.resolvePresetRange(datePreset);
+
+    return (records || []).filter(function(record) {
+      var recordDate = Model.normalizeComparableDate(record.dateReceived);
+      if (programToken && record.tokens.program !== programToken) return false;
+      if (es2Token && record.tokens.es2InCharge !== es2Token) return false;
+      if (statusToken && record.tokens.applicationStatus !== statusToken) return false;
+      if (transactionTypeToken && record.tokens.transactionType !== transactionTypeToken) return false;
+      if (heiToken && record.tokens.hei !== heiToken) return false;
+      if (datePreset === "specificDate") {
+        if (dateFrom && recordDate && recordDate < dateFrom) return false;
+        if (dateTo && recordDate && recordDate > dateTo) return false;
+      } else {
+        if (presetRange.from && recordDate && recordDate < presetRange.from) return false;
+        if (presetRange.to && recordDate && recordDate > presetRange.to) return false;
+      }
+      return true;
+    });
+  },
+
+  normalizeToken: function(value) {
+    var text = String(value == null ? "" : value).trim().toLowerCase();
+    if (!text || text === "all" || text === "unspecified") return "";
+    return text;
+  },
+
+  resolvePresetRange: function(preset) {
+    var today = new Date();
+    var todayValue = this.formatDateInputValue(today);
+    var currentYear = today.getFullYear();
+    if (preset === "allTime") return { from: "", to: "" };
+    if (preset === "thisYear") {
+      return { from: currentYear + "-01-01", to: currentYear + "-12-31" };
+    }
+    if (preset === "yearToDate") {
+      return { from: currentYear + "-01-01", to: todayValue };
+    }
+    if (preset === "last30Days") {
+      return { from: this.offsetDateValue(today, -29), to: todayValue };
+    }
+    if (preset === "last90Days") {
+      return { from: this.offsetDateValue(today, -89), to: todayValue };
+    }
+    return { from: currentYear + "-01-01", to: currentYear + "-12-31" };
+  },
+
+  offsetDateValue: function(date, days) {
+    var shifted = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    shifted.setDate(shifted.getDate() + Number(days || 0));
+    return this.formatDateInputValue(shifted);
+  },
+
+  formatDateInputValue: function(date) {
+    var year = date.getFullYear();
+    var month = String(date.getMonth() + 1).padStart(2, "0");
+    var day = String(date.getDate()).padStart(2, "0");
+    return year + "-" + month + "-" + day;
+  },
+
+  normalizeComparableDate: function(value) {
+    var text = String(value == null ? "" : value).trim();
+    if (!text) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    var parsed = new Date(text);
+    if (isNaN(parsed.getTime())) return "";
+    return this.formatDateInputValue(parsed);
+  },
+
+  getLatestRecordsById: function(records) {
+    var latestMap = {};
+    (records || []).forEach(function(record) {
+      var key = String(record.recordId || "").trim();
+      if (!key) key = "__row__" + String(record._row);
+      if (!latestMap[key] || Number(record._row || 0) > Number(latestMap[key]._row || 0)) {
+        latestMap[key] = record;
+      }
+    });
+    return Object.keys(latestMap).map(function(key) {
+      return latestMap[key];
+    });
+  },
+
+  extractAvailableYears: function(rows) {
+    var years = {};
+    (rows || []).forEach(function(row) {
+      var year = Model.extractYearFromMonthLabel(row && row.label);
+      if (year) years[year] = true;
+    });
+    return Object.keys(years).sort(function(a, b) {
+      return Number(b) - Number(a);
+    });
+  },
+
+  extractYearFromMonthLabel: function(label) {
+    var text = String(label || "").trim();
+    var match = text.match(/(\d{4})$/);
+    if (match) return match[1];
+    var parsed = new Date("1 " + text);
+    return isNaN(parsed.getTime()) ? "" : String(parsed.getFullYear());
+  },
+
+  extractAvailableYearsFromRecords: function(records) {
+    var years = {};
+    (records || []).forEach(function(record) {
+      var year = Model.extractYearFromDateValue(record && record.dateReceived);
+      if (year) years[year] = true;
+    });
+    return Object.keys(years).sort(function(a, b) {
+      return Number(b) - Number(a);
+    });
+  },
+
+  extractYearFromDateValue: function(value) {
+    var text = String(value || "").trim();
+    if (!text) return "";
+    var match = text.match(/^(\d{4})/);
+    if (match) return match[1];
+    var parsed = new Date(text);
+    return isNaN(parsed.getTime()) ? "" : String(parsed.getFullYear());
+  },
+
+  filterMonthlyRowsByYear: function(rows, selectedYear) {
+    var year = String(selectedYear || "").trim();
+    if (!year) return rows || [];
+    return (rows || []).filter(function(row) {
+      return Model.extractYearFromMonthLabel(row && row.label) === year;
+    });
+  },
+
+  buildAggregate: function(records) {
+    var aggregate = {
+      allRows: records,
+      latestRows: records,
+      topCards: {
+        total: records.length,
+        forEvaluation: 0,
+        evaluated: 0,
+        deficiency: 0,
+        approved: 0,
+        verified: 0,
+        forSignature: 0,
+        forRelease: 0,
+        released: 0,
+        cancelled: 0
+      },
+      statusCounts: this.createEmptyStatusCounts(),
+      programCounts: {},
+      es2Rows: {},
+      stageBacklog: {},
+      locationCounts: {},
+      people: {},
+      monthlyCounts: {},
+      sla: {
+        nearingBreach: 0,
+        overdue: 0
+      }
+    };
+
+    records.forEach(function(record) {
+      Model.incrementCounter(aggregate.programCounts, record.program || "Unspecified Program");
+      (record.responsiblePeople || record.assignedPeople || []).forEach(function(person) {
+        if (!aggregate.people[person]) {
+          aggregate.people[person] = {
+            person: person,
+            completed: 0,
+            pending: 0,
+            totalHandled: 0
+          };
+        }
+        aggregate.people[person].totalHandled += 1;
+        if (record.lifecycleBucket === "completed") aggregate.people[person].completed += 1;
+        else aggregate.people[person].pending += 1;
+      });
+    });
+
+    records.forEach(function(record) {
+      var canonicalStatus = record.canonicalStatus || Model.normalizeDashboardStatus(record.statusValue);
+      var reportableStatus = Model.normalizeReportableStatus(canonicalStatus);
+      if (reportableStatus) Model.incrementCounter(aggregate.statusCounts, reportableStatus);
+      if (canonicalStatus === "Cancelled") aggregate.topCards.cancelled += 1;
+
+      if (record.currentStage) Model.incrementCounter(aggregate.stageBacklog, record.currentStageLabel || Model.getStageLabel(record.currentStage));
+      if (record.currentLocation) Model.incrementCounter(aggregate.locationCounts, record.currentLocation);
+      if (record.dateReceived) Model.incrementCounter(aggregate.monthlyCounts, Model.formatMonthLabel(record.dateReceived));
+
+      var owner = record.es2InCharge || record.es2InChargeRaw;
+      if (owner) {
+        if (!aggregate.es2Rows[owner]) {
+          aggregate.es2Rows[owner] = {
+            es2: owner,
+            approvedCount: 0,
+            deficiencyCount: 0,
+            processingPendingCount: 0,
+            totalApplications: 0
+          };
+        }
+        aggregate.es2Rows[owner].totalApplications += 1;
+        if (reportableStatus === "Approved") aggregate.es2Rows[owner].approvedCount += 1;
+        if (reportableStatus === "Deficiency") aggregate.es2Rows[owner].deficiencyCount += 1;
+        if (reportableStatus && ["Approved", "Released", "Cancelled", "Deficiency"].indexOf(reportableStatus) === -1) {
+          aggregate.es2Rows[owner].processingPendingCount += 1;
+        }
+      }
+
+      if (record.targetReleaseDate && reportableStatus !== "Released" && reportableStatus !== "Cancelled") {
+        var diffDays = Model.computeDaysToTarget(record.targetReleaseDate);
+        if (diffDays < 0) aggregate.sla.overdue += 1;
+        else if (diffDays <= 3) aggregate.sla.nearingBreach += 1;
+      }
+    });
+
+    aggregate.topCards.forEvaluation = aggregate.statusCounts["For Evaluation"] || 0;
+    aggregate.topCards.evaluated = aggregate.statusCounts.Evaluated || 0;
+    aggregate.topCards.deficiency = aggregate.statusCounts.Deficiency || 0;
+    aggregate.topCards.approved = aggregate.statusCounts.Approved || 0;
+    aggregate.topCards.verified = aggregate.statusCounts.Verified || 0;
+    aggregate.topCards.forSignature = aggregate.statusCounts["For Signature"] || 0;
+    aggregate.topCards.forRelease = aggregate.statusCounts["For Release"] || 0;
+    aggregate.topCards.released = aggregate.statusCounts.Released || 0;
+
+    return aggregate;
+  },
+
+  computeDaysToTarget: function(targetDate) {
+    if (!targetDate) return 999;
+    var target = new Date(targetDate);
+    if (isNaN(target.getTime())) return 999;
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    target.setHours(0, 0, 0, 0);
+    return Math.floor((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  },
+
+  buildSummary: function(aggregate) {
+    return {
+      total: aggregate.topCards.total,
+      forEvaluation: aggregate.topCards.forEvaluation,
+      evaluated: aggregate.topCards.evaluated,
+      deficiency: aggregate.topCards.deficiency,
+      approved: aggregate.topCards.approved,
+      verified: aggregate.topCards.verified,
+      forSignature: aggregate.topCards.forSignature,
+      forRelease: aggregate.topCards.forRelease,
+      released: aggregate.topCards.released,
+      cancelled: aggregate.topCards.cancelled
+    };
+  },
+
+  buildSections: function(aggregate) {
+    var topPrograms = Object.keys(aggregate.programCounts).map(function(program) {
+      return { program: program, total: aggregate.programCounts[program] };
+    }).sort(function(a, b) {
+      return b.total - a.total || a.program.localeCompare(b.program);
+    }).slice(0, 10).map(function(entry, index) {
+      return {
+        rank: index + 1,
+        program: entry.program,
+        total: entry.total
+      };
+    });
+
+    var es2Rows = Object.keys(aggregate.es2Rows).map(function(key) {
+      return aggregate.es2Rows[key];
+    }).sort(function(a, b) {
+      return b.totalApplications - a.totalApplications || a.es2.localeCompare(b.es2);
+    });
+
+    return {
+      topPrograms: { rows: topPrograms },
+      overallApplicationStatus: {
+        rows: this.statusOrder.map(function(label) {
+          return { label: label, value: aggregate.statusCounts[label] || 0 };
+        })
+      },
+      statusProgression: {
+        rows: this.statusOrder.map(function(label) {
+          return { label: label, value: aggregate.statusCounts[label] || 0 };
+        })
+      },
+      es2Ownership: { rows: es2Rows },
+      stageBacklog: { rows: this.sortMetricRows(aggregate.stageBacklog) },
+      locationLoad: { rows: this.sortMetricRows(aggregate.locationCounts) },
+      productivity: {
+        rows: Object.keys(aggregate.people).map(function(name) {
+          return aggregate.people[name];
+        }).sort(function(a, b) {
+          return b.totalHandled - a.totalHandled || a.person.localeCompare(b.person);
+        })
+      },
+      monthlyVolume: { rows: this.sortMonthRows(aggregate.monthlyCounts) },
+      slaExposure: {
+        rows: [
+          { label: "Nearing Deadline", value: aggregate.sla.nearingBreach },
+          { label: "Overdue", value: aggregate.sla.overdue }
+        ]
+      }
+    };
+  },
+
+  buildOwnerModal: function(ownerName) {
+    var rows = this.filteredData.filter(function(record) {
+      return (record.es2InCharge || record.es2InChargeRaw) === ownerName;
+    });
+    return this.buildDetailModalPayload("ES II Owner", ownerName, rows, this.getOwnerModalColumns());
+  },
+
+  buildStatusModal: function(statusLabel) {
+    var rows = statusLabel === "Total" ? this.filteredData.slice() : this.filteredData.filter(function(record) {
+      var canonicalStatus = record.canonicalStatus || Model.normalizeDashboardStatus(record.statusValue);
+      var reportableStatus = Model.normalizeReportableStatus(canonicalStatus);
+      if (statusLabel === "Cancelled") return canonicalStatus === "Cancelled";
+      return reportableStatus === statusLabel;
+    });
+    return this.buildDetailModalPayload("Application Status", statusLabel, rows, this.getStatusModalColumns(), {
+      compactStatusModal: true
+    });
+  },
+
+  buildStaffModal: function(personName) {
+    var rows = this.filteredData.filter(function(record) {
+      return (record.responsiblePeople || record.assignedPeople || []).indexOf(personName) !== -1;
+    });
+    return this.buildDetailModalPayload("Assigned Staff", personName, rows);
+  },
+
+  getStatusModalColumns: function() {
+    return [
+      { field: "recordId", label: "ID" },
+      { field: "studentName", label: "Name" },
+      { field: "hei", label: "HEI" },
+      { field: "program", label: "Program" },
+      { field: "statusValue", label: "Application Status" }
+    ];
+  },
+
+  getOwnerModalColumns: function() {
+    return [
+      { field: "recordId", label: "ID" },
+      { field: "studentName", label: "Name" },
+      { field: "program", label: "Program" },
+      { field: "hei", label: "HEI" },
+      { field: "statusValue", label: "Application Status" },
+      { field: "transactionType", label: "Transaction Type" },
+      { field: "dateReceived", label: "Date Received" },
+      { field: "currentLocation", label: "Current Location" }
+    ];
+  },
+
+  buildDetailModalPayload: function(kind, name, rows, modalColumnsOverride, options) {
+    var aggregate = this.buildAggregate(rows);
+    var sections = this.buildSections(aggregate);
+    var programs = {};
+    var transactionTypes = {};
+    var locations = {};
+
+    rows.forEach(function(record) {
+      if (record.program) programs[record.program] = (programs[record.program] || 0) + 1;
+      if (record.transactionType) transactionTypes[record.transactionType] = (transactionTypes[record.transactionType] || 0) + 1;
+      if (record.currentLocation) locations[record.currentLocation] = (locations[record.currentLocation] || 0) + 1;
+    });
+
+    return {
+      kind: kind,
+      name: name,
+      summary: this.buildSummary(aggregate),
+      overallStatus: sections.overallApplicationStatus.rows,
+      statusProgression: sections.statusProgression.rows,
+      programRows: this.sortMetricRows(programs).slice(0, 8),
+      transactionRows: this.sortMetricRows(transactionTypes),
+      locationRows: this.sortMetricRows(locations).slice(0, 8),
+      records: rows.slice().sort(function(a, b) {
+        return Number(b._row || 0) - Number(a._row || 0);
+      }),
+      compactStatusModal: !!(options && options.compactStatusModal),
+      modalColumns: modalColumnsOverride || (this.referenceData.modalColumns && this.referenceData.modalColumns.length
+        ? this.referenceData.modalColumns
+        : [
+            { field: "recordId", label: "ID" },
+            { field: "studentName", label: "Name" },
+            { field: "program", label: "Program" },
+            { field: "hei", label: "HEI" },
+            { field: "statusValue", label: "Application Status" },
+            { field: "transactionType", label: "Transaction Type" },
+            { field: "dateReceived", label: "Date Received" },
+            { field: "currentLocation", label: "Current Location" },
+            { field: "currentStageLabel", label: "Current Stage" }
+          ])
+    };
+  },
+
+  setModalDetail: function(detail) {
+    this.modalState.detail = detail;
+    this.modalState.loading = false;
+    this.modalState.currentPage = Number(detail && detail.page || 1);
+  },
+
+  beginModalRequest: function() {
+    this.modalState.loading = true;
+    this.modalState.detail = null;
+    this.modalState.requestToken += 1;
+    this.modalState.currentPage = 1;
+    return this.modalState.requestToken;
+  },
+
+  beginDashboardRequest: function() {
+    this.dashboardRequestToken += 1;
+    return this.dashboardRequestToken;
+  },
+
+  isActiveDashboardRequest: function(token) {
+    return Number(token) === Number(this.dashboardRequestToken);
+  },
+
+  isActiveModalRequest: function(token) {
+    return Number(token) === Number(this.modalState.requestToken);
+  },
+
+  getModalPageCount: function() {
+    var pageCount = this.modalState.detail ? Number(this.modalState.detail.pageCount || 0) : 0;
+    if (pageCount) return Math.max(1, pageCount);
+    var totalRows = this.modalState.detail && this.modalState.detail.records ? this.modalState.detail.records.length : 0;
+    return Math.max(1, Math.ceil(totalRows / this.modalState.pageSize));
+  },
+
+  getModalPageRows: function() {
+    return this.modalState.detail && this.modalState.detail.records ? this.modalState.detail.records.slice() : [];
+  },
+
+  setModalPage: function(page) {
+    var pageCount = this.getModalPageCount();
+    var safePage = Number(page) || 1;
+    if (safePage < 1) safePage = 1;
+    if (safePage > pageCount) safePage = pageCount;
+    this.modalState.currentPage = safePage;
+  },
+
+  incrementCounter: function(counterMap, key) {
+    counterMap[key] = (counterMap[key] || 0) + 1;
+  },
+
+  sortMetricRows: function(countMap) {
+    return Object.keys(countMap).map(function(label) {
+      return { label: label, value: countMap[label] };
+    }).sort(function(a, b) {
+      return b.value - a.value || a.label.localeCompare(b.label);
+    });
+  },
+
+  sortMonthRows: function(countMap) {
+    return Object.keys(countMap).map(function(label) {
+      return {
+        label: label,
+        value: countMap[label],
+        sortKey: Model.monthLabelToSortKey(label)
+      };
+    }).sort(function(a, b) {
+      return b.sortKey.localeCompare(a.sortKey);
+    }).map(function(item) {
+      return { label: item.label, value: item.value };
+    });
+  },
+
+  monthLabelToSortKey: function(label) {
+    var parsed = new Date("1 " + label);
+    if (isNaN(parsed.getTime())) return "9999-99";
+    var year = parsed.getFullYear();
+    var month = String(parsed.getMonth() + 1).padStart(2, "0");
+    return year + "-" + month;
+  },
+
+  formatMonthLabel: function(value) {
+    var date = new Date(value);
+    if (isNaN(date.getTime())) return "";
+    return date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  },
+
+  getStageLabel: function(stageKey) {
+    var definitions = {
+      evaluation: "Evaluation",
+      verification: "Verification",
+      issuance: "Issuance",
+      deficiency: "Deficiency Encoding",
+      signature: "Signature",
+      release: "Release"
+    };
+    return definitions[stageKey] || "No Active Stage";
+  },
+
+  createEmptyStatusCounts: function() {
+    var counts = {};
+    this.statusOrder.forEach(function(label) {
+      counts[label] = 0;
+    });
+    return counts;
+  },
+
+  normalizeDashboardStatus: function(value) {
+    var token = this.normalizeToken(value);
+    if (!token) return "";
+    if (token.indexOf("for evaluation") !== -1) return "For Evaluation";
+    if (token.indexOf("evaluated") !== -1 || token.indexOf("for verification") !== -1) return "Evaluated";
+    if (token.indexOf("deficien") !== -1) return "Deficiency";
+    if (token.indexOf("verified") !== -1) return "Verified";
+    if (token.indexOf("for signature") !== -1 || token.indexOf("for signing") !== -1 || token.indexOf("signature") !== -1) return "For Signature";
+    if (token.indexOf("for release") !== -1 || token.indexOf("ready for release") !== -1 || token.indexOf("pending release") !== -1 || token.indexOf("releasing") !== -1) return "For Release";
+    if (token.indexOf("released") !== -1 || token.indexOf("release complete") !== -1 || token.indexOf("completed") !== -1) return "Released";
+    if (token.indexOf("cancel") !== -1) return "Cancelled";
+    if (token.indexOf("approved") !== -1 || token.indexOf("approeved") !== -1 || token.indexOf("arpproved") !== -1) return "Approved";
+    return "";
+  },
+
+  normalizeReportableStatus: function(statusValue) {
+    var s = String(statusValue || "").trim();
+    if (!s) return "";
+    if (s === "Approved" || s === "Verified" || s === "Released" || s === "Cancelled" || s === "Deficiency") return s;
+    if (s === "For Evaluation" || s === "Evaluated" || s === "For Signature" || s === "For Release") return s;
+    return "";
+  }
+};
+</script>

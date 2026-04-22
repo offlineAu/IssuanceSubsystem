@@ -1,0 +1,1044 @@
+<script>
+var View = {
+  chartRegistry: {},
+
+  cacheDom: function() {
+    if (!Model.dom) Model.dom = {};
+    Model.dom.pageStatusBanner = document.getElementById("pageStatusBanner");
+    Model.dom.reportBatchLoadingState = document.getElementById("reportBatchLoadingState");
+    Model.dom.reportBatchLoadingText = document.getElementById("reportBatchLoadingText");
+    Model.dom.reportShell = document.querySelector(".report-shell");
+    Model.dom.reportLoadingState = document.getElementById("reportLoadingState");
+    Model.dom.reportLoadingText = document.getElementById("reportLoadingText");
+    Model.dom.reportDatasetHint = document.getElementById("reportDatasetHint");
+    Model.dom.reportDataSourceHint = document.getElementById("reportDataSourceHint");
+    Model.dom.summaryCards = document.getElementById("summaryCards");
+    Model.dom.workloadOwnerChart = document.getElementById("workloadOwnerChart");
+    Model.dom.topProgramsBars = document.getElementById("topProgramsBars");
+    Model.dom.overallStatusBars = document.getElementById("overallStatusBars");
+    Model.dom.statusProgressionBars = document.getElementById("statusProgressionBars");
+    Model.dom.turnaroundSummary = document.getElementById("turnaroundSummary");
+    Model.dom.turnaroundHighlights = document.getElementById("turnaroundHighlights");
+    Model.dom.turnaroundGroups = document.getElementById("turnaroundGroups");
+    Model.dom.es2TableBody = document.getElementById("es2TableBody");
+    Model.dom.stageBacklogBars = document.getElementById("stageBacklogBars");
+    Model.dom.locationLoadBars = document.getElementById("locationLoadBars");
+    Model.dom.monthlyVolumeBars = document.getElementById("monthlyVolumeBars");
+    Model.dom.monthlyYearSelect = document.getElementById("monthlyYearSelect");
+    Model.dom.slaExposureBars = document.getElementById("slaExposureBars");
+    Model.dom.productivityChart = document.getElementById("productivityChart");
+    Model.dom.productivityTableBody = document.getElementById("productivityTableBody");
+    Model.dom.refreshButton = document.getElementById("refreshButton");
+    Model.dom.applyFiltersButton = document.getElementById("applyFiltersButton");
+    Model.dom.clearFiltersButton = document.getElementById("clearFiltersButton");
+    Model.dom.filterEs2 = document.getElementById("filterEs2");
+    Model.dom.filterProgram = document.getElementById("filterProgram");
+    Model.dom.filterStatus = document.getElementById("filterStatus");
+    Model.dom.filterTransactionType = document.getElementById("filterTransactionType");
+    Model.dom.filterHei = document.getElementById("filterHei");
+    Model.dom.filterDatePreset = document.getElementById("filterDatePreset");
+    Model.dom.filterDateFromWrap = document.getElementById("filterDateFromWrap");
+    Model.dom.filterDateToWrap = document.getElementById("filterDateToWrap");
+    Model.dom.filterDateFrom = document.getElementById("filterDateFrom");
+    Model.dom.filterDateTo = document.getElementById("filterDateTo");
+    Model.dom.detailModalEl = document.getElementById("detailModal");
+    Model.dom.detailModalKicker = document.getElementById("detailModalKicker");
+    Model.dom.detailModalTitle = document.getElementById("detailModalTitle");
+    Model.dom.detailModalLoadingState = document.getElementById("detailModalLoadingState");
+    Model.dom.detailModalMeta = document.getElementById("detailModalMeta");
+    Model.dom.detailModalSummary = document.getElementById("detailModalSummary");
+    Model.dom.detailModalPrograms = document.getElementById("detailModalPrograms");
+    Model.dom.detailModalTransactionTypes = document.getElementById("detailModalTransactionTypes");
+    Model.dom.detailModalOverallStatus = document.getElementById("detailModalOverallStatus");
+    Model.dom.detailModalProgression = document.getElementById("detailModalProgression");
+    Model.dom.detailModalLocations = document.getElementById("detailModalLocations");
+    Model.dom.detailModalTableHead = document.getElementById("detailModalTableHead");
+    Model.dom.detailModalTableBody = document.getElementById("detailModalTableBody");
+    Model.dom.detailModalPrevPage = document.getElementById("detailModalPrevPage");
+    Model.dom.detailModalNextPage = document.getElementById("detailModalNextPage");
+    Model.dom.detailModalPageStatus = document.getElementById("detailModalPageStatus");
+    Model.dom.detailModalInstance = Model.dom.detailModalEl ? new bootstrap.Modal(Model.dom.detailModalEl) : null;
+  },
+
+  bindStaticUi: function() {
+    [
+      Model.dom.filterEs2,
+      Model.dom.filterProgram,
+      Model.dom.filterStatus,
+      Model.dom.filterTransactionType,
+      Model.dom.filterHei,
+      Model.dom.filterDatePreset,
+      Model.dom.filterDateFrom,
+      Model.dom.filterDateTo
+    ].forEach(function(element) {
+      if (element) element.addEventListener("change", Controller.handleFilterDraftChange.bind(Controller));
+    });
+    if (Model.dom.applyFiltersButton) Model.dom.applyFiltersButton.addEventListener("click", Controller.handleApplyFilters.bind(Controller));
+    if (Model.dom.refreshButton) Model.dom.refreshButton.addEventListener("click", Controller.handleRefresh.bind(Controller));
+    if (Model.dom.clearFiltersButton) Model.dom.clearFiltersButton.addEventListener("click", Controller.handleClearFilters.bind(Controller));
+    if (Model.dom.detailModalPrevPage) {
+      Model.dom.detailModalPrevPage.addEventListener("click", Controller.handleModalPreviousPage.bind(Controller));
+    }
+    if (Model.dom.detailModalNextPage) {
+      Model.dom.detailModalNextPage.addEventListener("click", Controller.handleModalNextPage.bind(Controller));
+    }
+    if (Model.dom.monthlyYearSelect) {
+      Model.dom.monthlyYearSelect.addEventListener("change", Controller.handleMonthlyYearChange.bind(Controller));
+    }
+  },
+
+  readFilters: function() {
+    return {
+      program: Model.dom.filterProgram.value,
+      es2InCharge: Model.dom.filterEs2.value,
+      datePreset: Model.dom.filterDatePreset.value,
+      dateFrom: Model.dom.filterDateFrom.value,
+      dateTo: Model.dom.filterDateTo.value,
+      applicationStatus: Model.dom.filterStatus.value,
+      transactionType: Model.dom.filterTransactionType.value,
+      hei: Model.dom.filterHei.value
+    };
+  },
+
+  renderLoadingState: function(message) {
+    this.hideStatusBanner();
+    this.setInlineLoading(false, message || "Loading analytics...");
+    this.setLoadingMore(false);
+    if (Model.dom.summaryCards) Model.dom.summaryCards.innerHTML = this.buildSummarySkeleton();
+  },
+
+  renderFailure: function(message) {
+    console.error("Executive Dashboard UI failure:", message);
+    this.showStatusBanner(message, "danger");
+    this.setInlineLoading(false);
+    this.setLoadingMore(false);
+    if (Model.dom.summaryCards) Model.dom.summaryCards.innerHTML = this.buildSummarySkeleton("Error");
+    this.clearAllCharts();
+    if (Model.dom.topProgramsBars) Model.dom.topProgramsBars.innerHTML = this.buildSilentEmptyState();
+    if (Model.dom.overallStatusBars) Model.dom.overallStatusBars.innerHTML = this.buildChartEmptyState();
+    if (Model.dom.statusProgressionBars) Model.dom.statusProgressionBars.innerHTML = this.buildChartEmptyState();
+    if (Model.dom.turnaroundSummary) Model.dom.turnaroundSummary.innerHTML = this.buildSummarySkeleton();
+    if (Model.dom.turnaroundHighlights) Model.dom.turnaroundHighlights.innerHTML = this.buildChartEmptyState();
+    if (Model.dom.turnaroundGroups) Model.dom.turnaroundGroups.innerHTML = this.buildChartEmptyState();
+    if (Model.dom.es2TableBody) Model.dom.es2TableBody.innerHTML = this.buildEmptyRow(5, "No Data Available");
+    if (Model.dom.stageBacklogBars) Model.dom.stageBacklogBars.innerHTML = this.buildChartEmptyState();
+    if (Model.dom.locationLoadBars) Model.dom.locationLoadBars.innerHTML = this.buildChartEmptyState();
+    if (Model.dom.monthlyVolumeBars) Model.dom.monthlyVolumeBars.innerHTML = this.buildChartEmptyState();
+    if (Model.dom.monthlyYearSelect) Model.dom.monthlyYearSelect.innerHTML = "";
+    if (Model.dom.slaExposureBars) Model.dom.slaExposureBars.innerHTML = this.buildChartEmptyState();
+    if (Model.dom.productivityChart) Model.dom.productivityChart.innerHTML = this.buildChartEmptyState();
+    if (Model.dom.productivityTableBody) Model.dom.productivityTableBody.innerHTML = this.buildEmptyRow(4, "No Data Available");
+  },
+
+  buildEmptyRow: function(cols, text) {
+    return '<tr><td colspan="' + cols + '" class="text-center text-muted py-4">' + (text || "No records found") + '</td></tr>';
+  },
+
+  renderDashboard: function(payload, hydrateFilters) {
+    if (!payload) {
+      console.error("[VIEW] renderDashboard called with NULL payload");
+      this.renderFailure("No data received. Please refresh.");
+      return;
+    }
+    
+    // UNWRAP: Support Success-wrapped or direct payloads
+    var data = payload.handled ? payload.data : payload;
+    
+    console.log("[VIEW] Rendering dashboard. OK:", data.ok, "Summary present:", !!data.summary);
+
+    if (data.error) {
+      this.renderError(data.error);
+      return;
+    }
+
+    if (hydrateFilters && data.filters) this.populateFilters(data.filters);
+    
+    this.hideStatusBanner();
+    this.setInlineLoading(false);
+    
+    if (data.meta) this.renderMeta(data.meta);
+    
+    // SAFE RENDER: Ensure summary object exists
+    var summary = data.summary || { totalRecords: 0, total: 0 };
+    this.renderSummaryCards(summary);
+    
+    // SAFE RENDER: Ensure sections object exists
+    var sections = data.sections || {};
+    this.renderWorkload(sections.es2Ownership || { rows: [] });
+    
+    try {
+      this.renderTopPrograms(sections.topPrograms || { rows: [] });
+      this.renderOverallStatus(sections.overallApplicationStatus || { rows: [] });
+      this.renderStatusProgression(sections.statusProgression || { rows: [] });
+      this.renderTurnaround(sections.turnaroundTime || { summary: {}, rows: [] });
+      this.renderLocationLoad(sections.locationLoad || { rows: [] });
+      this.renderMonthlyVolume(sections.monthlyVolume || { rows: [] });
+      this.renderSlaExposure(sections.slaExposure || { rows: [] });
+      this.renderStageBacklog(sections.stageBacklog || { rows: [] });
+      this.renderProductivity(sections.productivity || { rows: [] });
+    } catch (renderError) {
+      console.error("[VIEW] Sub-section render failed:", renderError);
+    }
+  },
+
+  renderMeta: function(meta) {
+    var visible = meta.recordCount || 0;
+    var loaded = meta.loadedRecordCount || 0;
+    var total = meta.totalRecordCount || 0;
+    var hint = this.formatNumber(visible) + " shown";
+    if (total) hint += " / " + this.formatNumber(total) + " total";
+    else if (loaded) hint += " / " + this.formatNumber(loaded) + " loaded";
+    if (Model.dom.reportDatasetHint) Model.dom.reportDatasetHint.textContent = hint;
+    this.renderDataSourceHint(meta.cacheStatus || "");
+    if (meta && meta.cacheStatus) {
+      console.info("Executive Dashboard data source:", meta.cacheStatus, "requestId:", meta.requestId || "");
+    }
+  },
+
+  formatNumber: function(val) {
+    return Number(val || 0).toLocaleString();
+  },
+
+  renderDataSourceHint: function(cacheStatus) {
+    if (!Model.dom.reportDataSourceHint) return;
+    var token = String(cacheStatus || "").toLowerCase();
+    var labelMap = {
+      flat: "Source: Flat",
+      raw: "Source: Raw",
+      "client-array": "Source: Client Cache",
+      live: "Source: Live",
+      error: "Source: Error"
+    };
+    var label = labelMap[token] || "";
+    Model.dom.reportDataSourceHint.textContent = label;
+    Model.dom.reportDataSourceHint.classList.toggle("d-none", !label);
+  },
+
+  populateFilters: function(filters) {
+    // Ensure filters object and all required arrays/objects exist with safe defaults
+    var f = filters || {};
+    var es2Owners = f.es2Owners || [];
+    var programs = f.programs || [];
+    var applicationStatuses = f.applicationStatuses || [];
+    var transactionTypes = f.transactionTypes || ["Walk-In", "Online"];
+    var heis = f.heis || [];
+    var dateRange = f.dateRange || { min: "", max: "" };
+
+    console.log("Populating Dashboard filters:", {
+      es2Owners: es2Owners,
+      programs: programs,
+      applicationStatuses: applicationStatuses,
+      transactionTypes: transactionTypes,
+      heis: heis,
+      dateRange: dateRange
+    });
+
+    this.fillSelect(Model.dom.filterEs2, es2Owners, Model.filters.es2InCharge);
+    this.fillSelect(Model.dom.filterProgram, programs, Model.filters.program);
+    this.fillSelect(Model.dom.filterStatus, applicationStatuses, Model.filters.applicationStatus);
+    this.fillSelect(Model.dom.filterTransactionType, transactionTypes, Model.filters.transactionType);
+    this.fillSelect(Model.dom.filterHei, heis, Model.filters.hei);
+    
+    if (Model.dom.filterDatePreset) Model.dom.filterDatePreset.value = Model.filters.datePreset || "thisYear";
+    if (Model.dom.filterDateFrom) {
+      Model.dom.filterDateFrom.min = dateRange.min || "";
+      Model.dom.filterDateFrom.max = dateRange.max || "";
+      Model.dom.filterDateFrom.value = Model.filters.dateFrom || "";
+    }
+    if (Model.dom.filterDateTo) {
+      Model.dom.filterDateTo.min = dateRange.min || "";
+      Model.dom.filterDateTo.max = dateRange.max || "";
+      Model.dom.filterDateTo.value = Model.filters.dateTo || "";
+    }
+    this.syncDateFilterMode();
+    this.setApplyButtonState();
+  },
+
+  fillSelect: function(select, values, selectedValue, allLabel) {
+    if (!select) return;
+    select.innerHTML = "";
+    var allOption = document.createElement("option");
+    allOption.value = "ALL";
+    allOption.textContent = allLabel || "All";
+    select.appendChild(allOption);
+    (values || []).forEach(function(value) {
+      var option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    });
+    select.value = selectedValue || "ALL";
+  },
+
+  syncDateFilterMode: function() {
+    var useSpecificDate = Model.dom.filterDatePreset && Model.dom.filterDatePreset.value === "specificDate";
+    if (Model.dom.filterDateFromWrap) Model.dom.filterDateFromWrap.classList.toggle("d-none", !useSpecificDate);
+    if (Model.dom.filterDateToWrap) Model.dom.filterDateToWrap.classList.toggle("d-none", !useSpecificDate);
+    if (Model.dom.filterDateFrom) Model.dom.filterDateFrom.disabled = !useSpecificDate;
+    if (Model.dom.filterDateTo) Model.dom.filterDateTo.disabled = !useSpecificDate || !Model.dom.filterDateFrom.value;
+  },
+
+  renderSummaryCards: function(summary) {
+    var cards = [
+      ["Total", summary.total],
+      ["For Evaluation", summary.forEvaluation],
+      ["Evaluated", summary.evaluated],
+      ["Deficiency", summary.deficiency],
+      ["Approved", summary.approved],
+      ["Verified", summary.verified],
+      ["For Signature", summary.forSignature],
+      ["For Release", summary.forRelease],
+      ["Released", summary.released],
+      ["Cancelled", summary.cancelled]
+    ];
+    var visibleCards = [];
+    var zeroCards = [];
+    var self = this;
+    cards.forEach(function(card) {
+      var value = Number(card[1] || 0);
+      if (card[0] === "Total" || value > 0) visibleCards.push(card);
+      else zeroCards.push(card[0]);
+    });
+    if (zeroCards.length) visibleCards.push(["Inactive Stages", 0, zeroCards.join(" / ")]);
+    if (!visibleCards.length) visibleCards = [["Total", 0]];
+    if (Model.dom.summaryCards) {
+      Model.dom.summaryCards.innerHTML = visibleCards.map(function(card) {
+        var isGroupedZeroCard = card[0] === "Inactive Stages";
+        var clickable = !isGroupedZeroCard && card[0] !== "Total";
+        return '<div class="report-stat-card' + (isGroupedZeroCard ? ' report-stat-card-muted report-stat-card-grouped' : '') + (clickable ? ' analytics-clickable-card' : '') + '"' + (clickable ? ' data-detail-type="status" data-detail-name="' + self.escapeHtml(card[0]) + '"' : '') + '><span class="report-stat-label">' + self.escapeHtml(card[0]) + '</span>' +
+          (isGroupedZeroCard
+            ? '<div class="report-stat-muted-copy">No current records: ' + self.escapeHtml(card[2] || "") + '</div>'
+            : '<strong class="report-stat-value">' + self.formatNumber(card[1]) + "</strong>") +
+          "</div>";
+      }).join("");
+      this.bindSummaryCardClicks();
+    }
+  },
+
+  escapeHtml: function(text) {
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  },
+
+  bindSummaryCardClicks: function() {
+    if (!Model.dom.summaryCards) return;
+    Array.prototype.forEach.call(Model.dom.summaryCards.querySelectorAll(".analytics-clickable-card"), function(card) {
+      card.addEventListener("click", function() {
+        var name = card.getAttribute("data-detail-name");
+        Controller.openStatusModal(name);
+      });
+    });
+  },
+
+  renderWorkload: function(section) {
+    this.destroyChart("workloadOwnerChart");
+    var self = this;
+    if (Model.dom.es2TableBody) {
+      Model.dom.es2TableBody.innerHTML = section.rows && section.rows.length ? section.rows.map(function(row) {
+        return "<tr class='analytics-clickable-row' data-detail-type='owner' data-detail-name='" + encodeURIComponent(String(row.es2 || "")) + "'>" +
+          "<td><button type='button' class='analytics-link-button'>" + self.escapeHtml(row.es2) + "</button></td>" +
+          "<td>" + self.formatNumber(row.approvedCount) + "</td>" +
+          "<td>" + self.formatNumber(row.deficiencyCount) + "</td>" +
+          "<td>" + self.formatNumber(row.processingPendingCount) + "</td>" +
+          "<td>" + self.formatNumber(row.totalApplications) + "</td>" +
+        "</tr>";
+      }).join("") : this.buildEmptyRow(5, "No Data Available");
+      this.bindDetailRowClicks(Model.dom.es2TableBody);
+    }
+  },
+
+  renderTopPrograms: function(section) {
+    this.destroyChart("topProgramsChart");
+    if (!section.rows || !section.rows.length) {
+      if (Model.dom.topProgramsBars) Model.dom.topProgramsBars.innerHTML = this.buildSilentEmptyState();
+      return;
+    }
+    var self = this;
+    if (Model.dom.topProgramsBars) {
+      Model.dom.topProgramsBars.innerHTML =
+        '<div class="report-ranked-list report-scroll-body">' +
+          section.rows.map(function(row, index) {
+            var rank = Number(row.rank || 0) || (index + 1);
+            return "<div class='ranked-list-item'><span class='ranked-list-rank'>#" + self.formatNumber(rank) + "</span><div class='ranked-list-body'><span class='ranked-list-name'>" + self.escapeHtml(row.program) + "</span><strong class='ranked-list-value'>" + self.formatNumber(row.total) + "</strong></div></div>";
+          }).join("") +
+        "</div>";
+    }
+  },
+
+  renderTurnaround: function(section) {
+    var summary = section && section.summary ? section.summary : {};
+    var highlights = Array.isArray(section && section.highlights) ? section.highlights : [];
+    var groups = Array.isArray(section && section.groups) ? section.groups : [];
+    var self = this;
+    var summaryCards = [
+      ["Eligible Records", summary.eligibleRecordCount],
+      ["Average Total Days", summary.averageTotalDays],
+      ["Median Total Days", summary.medianTotalDays]
+    ];
+    if (Model.dom.turnaroundSummary) {
+      Model.dom.turnaroundSummary.innerHTML = summaryCards.map(function(card) {
+        return '<div class="report-stat-card turnaround-stat-card h-100"><span class="report-stat-label">' + self.escapeHtml(card[0]) + '</span><strong class="report-stat-value">' + self.formatNumber(Math.round(Number(card[1] || 0) * 10) / 10) + "</strong></div>";
+      }).join("");
+    }
+    if (Model.dom.turnaroundHighlights) {
+      if (!highlights.length) {
+        Model.dom.turnaroundHighlights.innerHTML = "";
+      } else {
+        Model.dom.turnaroundHighlights.innerHTML = highlights.map(function(item) {
+          return '<div class="report-card report-card-compact mb-3">' +
+            '<div class="report-stat-label">' + self.escapeHtml(item.label) + '</div>' +
+            '<div class="d-flex justify-content-between align-items-end gap-3 mt-2">' +
+              '<strong class="fs-5">' + self.escapeHtml(item.primary || "") + '</strong>' +
+              '<span class="text-muted small">' + self.escapeHtml(item.secondary || "") + '</span>' +
+            '</div>' +
+          '</div>';
+        }).join("");
+      }
+    }
+    if (!Model.dom.turnaroundGroups) return;
+    if (!groups.length) {
+      Model.dom.turnaroundGroups.innerHTML = this.buildChartEmptyState();
+      return;
+    }
+    Model.dom.turnaroundGroups.innerHTML = groups.map(function(group) {
+      return '<div class="col-12 col-xxl-6">' +
+        '<section class="report-card report-card-compact h-100">' +
+          '<div class="d-flex justify-content-between align-items-start gap-3 mb-3">' +
+            '<div>' +
+              '<div class="report-placeholder-kicker">Evaluation Status</div>' +
+              '<h4 class="mb-1">' + self.escapeHtml(group.label) + '</h4>' +
+            '</div>' +
+            '<div class="text-end">' +
+              '<div class="report-stat-label">Eligible Records</div>' +
+              '<strong class="report-stat-value fs-5">' + self.formatNumber(group.sampleCount || 0) + '</strong>' +
+            '</div>' +
+          '</div>' +
+          '<div class="table-responsive">' +
+            '<table class="table table-sm align-middle mb-0 analytics-table">' +
+              '<thead><tr><th>Metric</th><th>Average Business Days</th><th>Eligible Records</th></tr></thead>' +
+              '<tbody>' + group.metrics.map(function(metric) {
+                var metricLabel = metric.isTotal ? "<strong>" + self.escapeHtml(metric.label) + "</strong>" : self.escapeHtml(metric.label);
+                var metricRowClass = metric.isTotal ? "fw-semibold" : "text-muted";
+                return "<tr>" +
+                  "<td class=\"" + metricRowClass + "\">" + metricLabel + "</td>" +
+                  "<td class=\"" + metricRowClass + "\">" + self.formatNumber(Math.round(Number(metric.averageDays || 0) * 10) / 10) + "</td>" +
+                  "<td class=\"" + metricRowClass + "\">" + self.formatNumber(metric.sampleCount || 0) + "</td>" +
+                "</tr>";
+              }).join("") + '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</section>' +
+      '</div>';
+    }).join("");
+  },
+
+  renderOverallStatus: function(section) {
+    if (Model.dom.overallStatusBars) this.renderDonutChart(Model.dom.overallStatusBars, "overallStatusChart", section.rows || [], ["#1f429b", "#4f77d1", "#7ea0ea", "#f4d789", "#9ca3af"]);
+  },
+
+  renderStatusProgression: function(section) {
+    if (Model.dom.statusProgressionBars) this.renderHorizontalBarChart(Model.dom.statusProgressionBars, "statusProgressionChart", {
+      labels: (section.rows || []).map(function(row) { return row.label; }),
+      values: (section.rows || []).map(function(row) { return row.value; }),
+      color: "#4f77d1"
+    });
+  },
+
+  renderLocationLoad: function(section) {
+    if (Model.dom.locationLoadBars) this.renderHorizontalBarChart(Model.dom.locationLoadBars, "locationLoadChart", {
+      labels: (section.rows || []).slice(0, 12).map(function(row) { return row.label; }),
+      values: (section.rows || []).slice(0, 12).map(function(row) { return row.value; }),
+      color: "#16377f"
+    });
+  },
+
+  renderMonthlyVolume: function(section) {
+    var rows = Array.isArray(section && section.rows) ? section.rows.slice() : [];
+    Model.monthlyVolumeRows = rows;
+    this.populateMonthlyYearSelect();
+    var selectedYear = Model.monthlyYear || (Model.dom.monthlyYearSelect ? Model.dom.monthlyYearSelect.value : "");
+    var filteredRows = Model.filterMonthlyRowsByYear(rows, selectedYear);
+    if (!filteredRows.length && rows.length) {
+      var fallbackYears = Model.extractAvailableYears(rows);
+      var currentCalendarYear = String(new Date().getFullYear());
+      selectedYear = fallbackYears.indexOf(currentCalendarYear) !== -1 ? currentCalendarYear : (fallbackYears[0] || "");
+      Model.monthlyYear = selectedYear;
+      if (Model.dom.monthlyYearSelect) Model.dom.monthlyYearSelect.value = selectedYear;
+      filteredRows = Model.filterMonthlyRowsByYear(rows, selectedYear);
+    }
+    if (Model.dom.monthlyVolumeBars) this.renderVerticalBarChart(Model.dom.monthlyVolumeBars, "monthlyVolumeChart", {
+      labels: filteredRows.map(function(row) { return row.label; }),
+      values: filteredRows.map(function(row) { return row.value; }),
+      color: "#1f429b"
+    });
+  },
+
+  populateMonthlyYearSelect: function() {
+    if (!Model.dom.monthlyYearSelect) return;
+    var years = (Model.referenceData.availableYears && Model.referenceData.availableYears.length)
+      ? Model.referenceData.availableYears.slice()
+      : Model.extractAvailableYearsFromRecords(Model.fullData);
+    var currentCalendarYear = String(new Date().getFullYear());
+    var current = Model.monthlyYear && years.indexOf(Model.monthlyYear) !== -1 ? Model.monthlyYear : "";
+    if (!current && years.indexOf(currentCalendarYear) !== -1) current = currentCalendarYear;
+    if (!current) current = years.length ? years[0] : "";
+    Model.monthlyYear = current;
+    var self = this;
+    Model.dom.monthlyYearSelect.innerHTML = years.length ? years.map(function(year) {
+      return '<option value="' + self.escapeHtml(year) + '">' + self.escapeHtml(year) + '</option>';
+    }).join("") : '<option value="">No Years</option>';
+    Model.dom.monthlyYearSelect.value = current;
+    Model.dom.monthlyYearSelect.disabled = !years.length;
+  },
+
+  renderSlaExposure: function(section) {
+    if (Model.dom.slaExposureBars) this.renderVerticalBarChart(Model.dom.slaExposureBars, "slaExposureChart", {
+      labels: (section.rows || []).map(function(row) { return row.label; }),
+      values: (section.rows || []).map(function(row) { return row.value; }),
+      color: "#f4b942"
+    });
+  },
+
+  renderStageBacklog: function(section) {
+    if (Model.dom.stageBacklogBars) this.renderHorizontalBarChart(Model.dom.stageBacklogBars, "stageBacklogChart", {
+      labels: (section.rows || []).map(function(row) { return row.label; }),
+      values: (section.rows || []).map(function(row) { return row.value; }),
+      color: "#3559c7"
+    });
+  },
+
+  renderProductivity: function(section) {
+    var topRows = (section.rows || []).slice(0, 10);
+    if (Model.dom.productivityChart) this.renderStackedBarChart(Model.dom.productivityChart, "productivityChart", {
+      labels: topRows.map(function(row) { return row.person; }),
+      completed: topRows.map(function(row) { return row.completed; }),
+      pending: topRows.map(function(row) { return row.pending; })
+    });
+    var self = this;
+    if (Model.dom.productivityTableBody) {
+      Model.dom.productivityTableBody.innerHTML = section.rows && section.rows.length ? section.rows.map(function(row) {
+        return "<tr class='analytics-clickable-row' data-detail-type='staff' data-detail-name='" + encodeURIComponent(String(row.person || "")) + "'>" +
+          "<td><button type='button' class='analytics-link-button'>" + self.escapeHtml(row.person) + "</button></td>" +
+          "<td>" + self.formatNumber(row.completed) + "</td>" +
+          "<td>" + self.formatNumber(row.pending) + "</td>" +
+          "<td>" + self.formatNumber(row.totalHandled) + "</td>" +
+        "</tr>";
+      }).join("") : this.buildEmptyRow(4, "No Data Available");
+      this.bindDetailRowClicks(Model.dom.productivityTableBody);
+    }
+  },
+
+  bindDetailRowClicks: function(container) {
+    if (!container) return;
+    Array.prototype.forEach.call(container.querySelectorAll(".analytics-clickable-row"), function(row) {
+      row.addEventListener("click", function(event) {
+        if (event.target && event.target.closest("button")) event.preventDefault();
+        var type = row.getAttribute("data-detail-type");
+        var name = decodeURIComponent(row.getAttribute("data-detail-name") || "");
+        if (type === "owner") Controller.openOwnerModal(name);
+        if (type === "staff") Controller.openStaffModal(name);
+      });
+    });
+  },
+
+  renderDetailModalLoading: function(kind, name) {
+    Model.modalState.loading = true;
+    if (Model.dom.detailModalKicker) Model.dom.detailModalKicker.textContent = kind;
+    if (Model.dom.detailModalTitle) Model.dom.detailModalTitle.textContent = name;
+    if (Model.dom.detailModalMeta) {
+      Model.dom.detailModalMeta.textContent = "";
+      Model.dom.detailModalMeta.classList.add("d-none");
+    }
+    this.setDetailModalLoading(true);
+    if (Model.dom.detailModalSummary) Model.dom.detailModalSummary.innerHTML = this.buildSummarySkeleton("Loading");
+    if (Model.dom.detailModalPrograms) Model.dom.detailModalPrograms.innerHTML = this.buildChartSkeleton();
+    if (Model.dom.detailModalTransactionTypes) Model.dom.detailModalTransactionTypes.innerHTML = this.buildChartSkeleton();
+    if (Model.dom.detailModalOverallStatus) Model.dom.detailModalOverallStatus.innerHTML = this.buildChartSkeleton();
+    if (Model.dom.detailModalProgression) Model.dom.detailModalProgression.innerHTML = this.buildChartSkeleton();
+    if (Model.dom.detailModalLocations) Model.dom.detailModalLocations.innerHTML = this.buildChartSkeleton();
+    if (Model.dom.detailModalTableHead) Model.dom.detailModalTableHead.innerHTML = "";
+    if (Model.dom.detailModalTableBody) Model.dom.detailModalTableBody.innerHTML = this.buildTableSkeletonRows(6, 5);
+    this.renderDetailModalPagination({ page: 1, pageCount: 1, recordCount: 0, displayedRecordCount: 0 });
+    if (Model.dom.detailModalInstance) Model.dom.detailModalInstance.show();
+  },
+
+  setRefreshBusy: function(isBusy) {
+    if (!Model.dom.refreshButton) return;
+    Model.dom.refreshButton.disabled = isBusy;
+    Model.dom.refreshButton.innerHTML = isBusy
+      ? '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>'
+      : '<i class="bi bi-arrow-clockwise" aria-hidden="true"></i>';
+  },
+
+  setFilterBusy: function(isBusy, message) {
+    Model.filterBusy = isBusy;
+    this.getFilterControls().forEach(function(element) {
+      element.disabled = !!isBusy;
+    });
+    this.setApplyButtonState();
+    this.setInlineLoading(isBusy, message || "Filtering analytics...");
+  },
+
+  setFiltersLocked: function(isLocked) {
+    Model.filtersLocked = !!isLocked;
+    this.getFilterControls().forEach(function(element) {
+      element.disabled = !!isLocked;
+    });
+    this.setApplyButtonState();
+  },
+
+  getFilterControls: function() {
+    return [
+      Model.dom.filterEs2,
+      Model.dom.filterProgram,
+      Model.dom.filterStatus,
+      Model.dom.filterTransactionType,
+      Model.dom.filterHei,
+      Model.dom.filterDatePreset,
+      Model.dom.filterDateFrom,
+      Model.dom.filterDateTo,
+      Model.dom.applyFiltersButton,
+      Model.dom.clearFiltersButton
+    ].filter(Boolean);
+  },
+
+  setApplyButtonState: function() {
+    if (!Model.dom.applyFiltersButton) return;
+    var isBusy = !!Model.filterBusy;
+    Model.dom.applyFiltersButton.disabled = isBusy || !!Model.filtersLocked || !Model.hasPendingFilterChanges;
+    Model.dom.applyFiltersButton.textContent = isBusy ? "Applying..." : "Apply Filters";
+  },
+
+  setInlineLoading: function(show, message) {
+    if (Model.dom.reportLoadingState) Model.dom.reportLoadingState.classList.toggle("d-none", !show);
+    if (message && Model.dom.reportLoadingText) Model.dom.reportLoadingText.textContent = message;
+  },
+
+  setLoadingMore: function(show, message) {
+    if (!Model.dom.reportBatchLoadingState) return;
+    Model.dom.reportBatchLoadingState.classList.toggle("d-none", !show);
+    if (message && Model.dom.reportBatchLoadingText) Model.dom.reportBatchLoadingText.textContent = message;
+  },
+
+  showStatusBanner: function(message, type) {
+    if (!Model.dom.pageStatusBanner) return;
+    var classMap = { danger: "dashboard-banner-danger" };
+    Model.dom.pageStatusBanner.className = "dashboard-banner " + (classMap[type] || "dashboard-banner-danger");
+    Model.dom.pageStatusBanner.textContent = message;
+    Model.dom.pageStatusBanner.classList.remove("d-none");
+  },
+
+  hideStatusBanner: function() {
+    if (!Model.dom.pageStatusBanner) return;
+    Model.dom.pageStatusBanner.className = "dashboard-banner d-none";
+    Model.dom.pageStatusBanner.textContent = "";
+  },
+
+  buildSilentEmptyState: function() {
+    return '<div class="report-empty-state">No Data Available</div>';
+  },
+
+  buildChartEmptyState: function() {
+    return '<div class="report-chart-empty">No chart data available.</div>';
+  },
+
+  buildChartSkeleton: function() {
+    return '<div class="chart-skeleton"></div>';
+  },
+
+  buildTableSkeletonRows: function(rowCount, columnCount) {
+    var rows = [];
+    for (var rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      var columns = [];
+      for (var columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+        columns.push('<td><div class="table-skeleton-line"></div></td>');
+      }
+      rows.push("<tr>" + columns.join("") + "</tr>");
+    }
+    return rows.join("");
+  },
+
+  buildSummarySkeleton: function(label) {
+    var text = label || "Loading";
+    return Array.from({ length: 6 }).map(function() {
+      return '<div class="report-stat-card"><span class="report-stat-label">' + text + '</span><strong class="report-stat-value">...</strong></div>';
+    }).join("");
+  },
+
+  renderHorizontalBarChart: function(container, chartKey, chartData, isMini) {
+    this.renderChartBlock(container, chartKey, {
+      type: "bar",
+      data: {
+        labels: chartData.labels || [],
+        datasets: [{
+          data: chartData.values || [],
+          backgroundColor: chartData.color || "#1f429b",
+          borderRadius: 10
+        }]
+      },
+      options: this.buildHorizontalBarOptions(!!isMini)
+    }, isMini);
+  },
+
+  renderVerticalBarChart: function(container, chartKey, chartData, isMini) {
+    this.renderChartBlock(container, chartKey, {
+      type: "bar",
+      data: {
+        labels: chartData.labels || [],
+        datasets: [{
+          data: chartData.values || [],
+          backgroundColor: chartData.color || "#1f429b",
+          borderRadius: 10
+        }]
+      },
+      options: this.buildVerticalBarOptions(!!isMini)
+    }, isMini);
+  },
+
+  renderDonutChart: function(container, chartKey, rows, colors, isMini) {
+    this.renderChartBlock(container, chartKey, {
+      type: "doughnut",
+      data: {
+        labels: (rows || []).map(function(row) { return row.label; }),
+        datasets: [{
+          data: (rows || []).map(function(row) { return row.value; }),
+          backgroundColor: colors,
+          borderWidth: 0
+        }]
+      },
+      options: this.buildDonutOptions(!!isMini)
+    }, isMini);
+  },
+
+  renderStackedBarChart: function(container, chartKey, chartData) {
+    this.renderChartBlock(container, chartKey, {
+      type: "bar",
+      data: {
+        labels: chartData.labels || [],
+        datasets: [
+          {
+            label: "Completed",
+            data: chartData.completed || [],
+            backgroundColor: "#1f429b",
+            borderRadius: 8
+          },
+          {
+            label: "Pending",
+            data: chartData.pending || [],
+            backgroundColor: "#a8b8e8",
+            borderRadius: 8
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: "bottom",
+            labels: { boxWidth: 12, color: "#64748b" }
+          }
+        },
+        scales: {
+          x: {
+            stacked: true,
+            ticks: { color: "#64748b" },
+            grid: { display: false }
+          },
+          y: {
+            stacked: true,
+            ticks: { color: "#64748b" },
+            grid: { color: "rgba(100, 116, 139, 0.15)" }
+          }
+        }
+      }
+    });
+  },
+
+  renderChartBlock: function(container, chartKey, config, isMini) {
+    if (!container) return;
+    var dataPoints = [];
+    if (config && config.data && config.data.datasets) {
+      config.data.datasets.forEach(function(dataset) {
+        dataPoints = dataPoints.concat(dataset.data || []);
+      });
+    }
+    var hasData = dataPoints.some(function(value) { return Number(value || 0) > 0; });
+    if (!hasData) {
+      this.destroyChart(chartKey);
+      container.innerHTML = this.buildChartEmptyState();
+      return;
+    }
+    var canvasId = chartKey + "Canvas";
+    container.innerHTML = '<div class="report-chart-block' + (isMini ? ' report-chart-block-mini' : '') + '"><canvas id="' + canvasId + '" class="report-chart-canvas"></canvas></div>';
+    this.renderChart(chartKey, document.getElementById(canvasId), config);
+  },
+
+  renderChart: function(chartKey, canvas, config) {
+    if (!canvas) return;
+    this.destroyChart(chartKey);
+    this.chartRegistry[chartKey] = new Chart(canvas, config);
+  },
+
+  destroyChart: function(chartKey) {
+    if (this.chartRegistry[chartKey]) {
+      this.chartRegistry[chartKey].destroy();
+      delete this.chartRegistry[chartKey];
+    }
+  },
+
+  clearAllCharts: function() {
+    var self = this;
+    Object.keys(this.chartRegistry).forEach(function(chartKey) {
+      self.destroyChart(chartKey);
+    });
+  },
+
+  buildHorizontalBarOptions: function(isMini) {
+    return {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          ticks: { color: "#64748b", precision: 0, font: { size: isMini ? 10 : 11 } },
+          grid: { color: "rgba(100, 116, 139, 0.15)" }
+        },
+        y: {
+          ticks: { color: "#334155", font: { size: isMini ? 10 : 11 } },
+          grid: { display: false }
+        }
+      }
+    };
+  },
+
+  buildVerticalBarOptions: function(isMini) {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          ticks: { color: "#64748b", font: { size: isMini ? 10 : 11 } },
+          grid: { display: false }
+        },
+        y: {
+          ticks: { color: "#64748b", precision: 0, font: { size: isMini ? 10 : 11 } },
+          grid: { color: "rgba(100, 116, 139, 0.15)" }
+        }
+      }
+    };
+  },
+
+  buildDonutOptions: function(isMini) {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: "bottom",
+          labels: {
+            color: "#64748b",
+            boxWidth: 12,
+            font: { size: isMini ? 10 : 11 }
+          }
+        }
+      }
+    };
+  },
+
+  // Modal rendering methods
+  renderDetailModalLoading: function(kind, name) {
+    if (!Model.dom.detailModalKicker) return;
+    Model.dom.detailModalKicker.textContent = kind || "Detail";
+    if (Model.dom.detailModalTitle) Model.dom.detailModalTitle.textContent = name || "Loading...";
+    if (Model.dom.detailModalLoadingState) Model.dom.detailModalLoadingState.classList.remove("d-none");
+    if (Model.dom.detailModalMeta) {
+      Model.dom.detailModalMeta.textContent = "Loading records...";
+      Model.dom.detailModalMeta.classList.remove("d-none");
+    }
+    // Clear content areas
+    if (Model.dom.detailModalSummary) Model.dom.detailModalSummary.innerHTML = this.buildSummarySkeleton("Loading");
+    if (Model.dom.detailModalPrograms) Model.dom.detailModalPrograms.innerHTML = this.buildSilentEmptyState();
+    if (Model.dom.detailModalTransactionTypes) Model.dom.detailModalTransactionTypes.innerHTML = this.buildSilentEmptyState();
+    if (Model.dom.detailModalOverallStatus) Model.dom.detailModalOverallStatus.innerHTML = this.buildSilentEmptyState();
+    if (Model.dom.detailModalProgression) Model.dom.detailModalProgression.innerHTML = this.buildSilentEmptyState();
+    if (Model.dom.detailModalLocations) Model.dom.detailModalLocations.innerHTML = this.buildSilentEmptyState();
+    if (Model.dom.detailModalTableHead) Model.dom.detailModalTableHead.innerHTML = "";
+    if (Model.dom.detailModalTableBody) Model.dom.detailModalTableBody.innerHTML = this.buildTableSkeletonRows(5, 4);
+    
+    // Show modal
+    if (Model.dom.detailModalInstance) Model.dom.detailModalInstance.show();
+  },
+
+  renderDetailModal: function(detail) {
+    if (!detail) return;
+    
+    // Update header
+    if (Model.dom.detailModalKicker) Model.dom.detailModalKicker.textContent = detail.kind || "Detail";
+    if (Model.dom.detailModalTitle) Model.dom.detailModalTitle.textContent = detail.name || "Analytics Detail";
+    if (Model.dom.detailModalLoadingState) Model.dom.detailModalLoadingState.classList.add("d-none");
+    
+    // Update meta (match Executive Dashboard format)
+    if (Model.dom.detailModalMeta) {
+      var totalCount = Number(detail.totalCount || 0);
+      var displayedCount = Number(detail.displayedRecordCount || totalCount);
+      var page = Number(detail.page || 1);
+      var pageCount = Number(detail.pageCount || 1);
+      var metaMessage = "Showing " + this.formatNumber(displayedCount) + " records on page " + page + " of " + pageCount;
+      if (totalCount > displayedCount || pageCount > 1) {
+        metaMessage += ". Total matches: " + this.formatNumber(totalCount);
+      }
+      Model.dom.detailModalMeta.textContent = metaMessage;
+      Model.dom.detailModalMeta.classList.remove("d-none");
+    }
+    
+    // Render summary cards (match Executive Dashboard)
+    if (Model.dom.detailModalSummary) {
+      Model.dom.detailModalSummary.innerHTML = detail.compactStatusModal ? "" : this.buildModalSummaryCards(detail.summary);
+      this.toggleDetailSection(Model.dom.detailModalSummary, !detail.compactStatusModal);
+    }
+    
+    // Render programs breakdown with horizontal bar chart (match Executive Dashboard)
+    if (Model.dom.detailModalPrograms) {
+      this.renderHorizontalBarChart(Model.dom.detailModalPrograms, "detailProgramsChart", {
+        labels: (detail.programRows || detail.programs || []).map(function(row) { return row.label || row.program; }),
+        values: (detail.programRows || detail.programs || []).map(function(row) { return row.value || row.total || 0; }),
+        color: "#1f429b"
+      }, true);
+    }
+    
+    // Render transaction types with horizontal bar chart
+    if (Model.dom.detailModalTransactionTypes) {
+      this.renderHorizontalBarChart(Model.dom.detailModalTransactionTypes, "detailTransactionChart", {
+        labels: (detail.transactionRows || detail.transactionTypes || []).map(function(row) { return row.label; }),
+        values: (detail.transactionRows || detail.transactionTypes || []).map(function(row) { return row.value; }),
+        color: "#3559c7"
+      }, true);
+    }
+    
+    // Render overall status with donut chart (match Executive Dashboard)
+    if (Model.dom.detailModalOverallStatus) {
+      if (detail.compactStatusModal) {
+        this.destroyChart("detailOverallStatusChart");
+        Model.dom.detailModalOverallStatus.innerHTML = "";
+      } else {
+        this.renderDonutChart(Model.dom.detailModalOverallStatus, "detailOverallStatusChart", detail.overallStatusRows || detail.overallStatus || [], ["#1f429b", "#4f77d1", "#7ea0ea", "#f4d789", "#9ca3af"], true);
+      }
+      this.toggleDetailSection(Model.dom.detailModalOverallStatus, !detail.compactStatusModal);
+    }
+    
+    // Render status progression with horizontal bar chart
+    if (Model.dom.detailModalProgression) {
+      if (detail.compactStatusModal) {
+        this.destroyChart("detailProgressionChart");
+        Model.dom.detailModalProgression.innerHTML = "";
+      } else {
+        var progressionData = detail.statusProgressionRows || detail.statusProgression || detail.overallStatus || [];
+        this.renderHorizontalBarChart(Model.dom.detailModalProgression, "detailProgressionChart", {
+          labels: progressionData.map(function(row) { return row.label; }),
+          values: progressionData.map(function(row) { return row.value; }),
+          color: "#4f77d1"
+        }, true);
+      }
+      this.toggleDetailSection(Model.dom.detailModalProgression, !detail.compactStatusModal);
+    }
+    
+    // Render locations with horizontal bar chart
+    if (Model.dom.detailModalLocations) {
+      this.renderHorizontalBarChart(Model.dom.detailModalLocations, "detailLocationsChart", {
+        labels: (detail.locationRows || detail.locations || []).map(function(row) { return row.label || row.loc || "Unknown"; }),
+        values: (detail.locationRows || detail.locations || []).map(function(row) { return row.value || row.c || 0; }),
+        color: "#16377f"
+      }, true);
+    }
+    
+    // Render table with dynamic columns like Executive Dashboard
+    this.renderDetailModalTable(detail.modalColumns || [
+      { label: "Record ID", field: "recordId" },
+      { label: "Student Name", field: "studentName" },
+      { label: "Program", field: "program" },
+      { label: "Status", field: "applicationStatus" },
+      { label: "Location", field: "currentLocation" },
+      { label: "Date Received", field: "dateReceived" }
+    ], detail.rows || []);
+    
+    // Update pagination
+    this.renderDetailModalPagination(detail);
+  },
+
+  // Helper methods matching Executive Dashboard
+  buildModalSummaryCards: function(summary) {
+    if (!summary) return "";
+    var cards = [
+      { label: "Total Records", value: summary.totalCount || 0 },
+      { label: "Programs", value: summary.programCount || 0 },
+      { label: "Locations", value: summary.locationCount || 0 },
+      { label: "Status Types", value: summary.statusTypeCount || 0 }
+    ];
+    return cards.map(function(card) {
+      return '<div class="report-stat-card report-stat-card-compact"><span class="report-stat-label">' + card.label + '</span><strong class="report-stat-value">' + this.formatNumber(card.value) + '</strong></div>';
+    }.bind(this)).join("");
+  },
+
+  toggleDetailSection: function(element, show) {
+    if (!element) return;
+    var card = element.closest(".report-card");
+    if (card) card.classList.toggle("d-none", !show);
+  },
+
+  renderDetailModalTable: function(columns, records) {
+    if (Model.dom.detailModalTableHead) {
+      Model.dom.detailModalTableHead.innerHTML = "<tr>" + columns.map(function(column) {
+        return "<th>" + this.escapeHtml(column.label) + "</th>";
+      }.bind(this)).join("") + "</tr>";
+    }
+    if (Model.dom.detailModalTableBody) {
+      Model.dom.detailModalTableBody.innerHTML = records.length ? records.map(function(record) {
+        return "<tr>" + columns.map(function(column) {
+          var value = record[column.field];
+          if (value === null || value === undefined) value = "";
+          return "<td>" + this.escapeHtml(String(value)) + "</td>";
+        }.bind(this)).join("") + "</tr>";
+      }.bind(this)).join("") : '<tr><td colspan="' + columns.length + '" class="text-center text-muted py-4">No records found</td></tr>';
+    }
+  },
+
+  renderDetailModalPagination: function(pagination) {
+    if (!pagination) return;
+    var currentPage = pagination.page || 1;
+    var totalPages = pagination.pageCount || 1;
+    
+    if (Model.dom.detailModalPageStatus) {
+      Model.dom.detailModalPageStatus.textContent = "Page " + currentPage + " of " + totalPages;
+    }
+    if (Model.dom.detailModalPrevPage) {
+      Model.dom.detailModalPrevPage.disabled = currentPage <= 1;
+    }
+    if (Model.dom.detailModalNextPage) {
+      Model.dom.detailModalNextPage.disabled = currentPage >= totalPages;
+    }
+  },
+
+  buildBarsHtml: function(rows) {
+    if (!rows || rows.length === 0) {
+      return this.buildSilentEmptyState();
+    }
+    var max = Math.max.apply(Math, rows.map(function(r) { return r.value || 0; }));
+    return rows.map(function(row) {
+      var pct = max > 0 ? Math.round((row.value || 0) / max * 100) : 0;
+      return '<div class="report-bar-row">' +
+        '<div class="report-bar-text">' +
+          '<span class="report-bar-label">' + this.escapeHtml(row.label || "") + '</span>' +
+          '<span class="report-bar-value">' + this.formatNumber(row.value || 0) + '</span>' +
+        '</div>' +
+        '<div class="report-bar-track">' +
+          '<span class="report-bar-fill" style="width:' + pct + '%"></span>' +
+        '</div>' +
+      '</div>';
+    }.bind(this)).join("");
+  }
+};
+</script>

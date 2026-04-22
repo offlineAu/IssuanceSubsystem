@@ -105,9 +105,13 @@ var Controller = {
     }
     View.renderModuleState();
     if (activeModule === "typing") {
-      View.renderTypingModule();
+      if (typeof TypingView !== "undefined" && TypingView && typeof TypingView.render === "function") {
+        TypingView.render();
+      }
     } else if (activeModule === "dashboard") {
-      View.renderDashboardModule(Model.dashboard.data);
+      if (typeof DashboardView !== "undefined" && DashboardView && typeof DashboardView.render === "function") {
+        DashboardView.render(Model.dashboard.data);
+      }
     }
   },
 
@@ -181,195 +185,12 @@ var Controller = {
     this.loadSoPrefixes();
     View.populateSeriesDropdown(String(new Date().getFullYear()));
     this.setActiveMainView("home");
-    this.updateModuleIndicator();
-    Service.getUserModuleAccess().then(function(result) {
-      Model.userContext = result || Model.userContext;
-      Model.activeModule = Controller.resolveInitialModule((result && result.modules) || []);
-      Controller.updateModuleIndicator();
-      if (Model.activeModule === "issuance") {
-        Controller.initData();
-        Controller.startDatabaseRowPolling();
-      } else if (Model.activeModule === "typing") {
-        Controller.initTypingModule();
-        Controller.initData();
-      } else if (Model.activeModule === "dashboard") {
-        Controller.initDashboardModule();
-      } else {
-        console.log("[MODULE LOADER] Active module: " + (Model.activeModule || "none"));
-      }
-    }).catch(function(error) {
-      Model.userContext = { email: null, position: null, access: "", modules: [] };
-      Model.activeModule = null;
-      Controller.updateModuleIndicator();
-      console.log("[MODULE LOADER] Failed to load module access");
-      console.log(error);
-    });
-  },
-
-  initDashboardModule: function() {
-    this.exitModule((Model.executionLock && Model.executionLock.activeModule) || null);
-    var requestId = this.enterModule("dashboard");
-    console.log("[MODULE DASHBOARD] initDashboardModule called");
-    Model.safeSet("dashboard", "dashboard", { data: null, isLoading: true });
-    View.renderDashboardModule(null);
-    Service.getDashboardData({}).then(this.guardModuleCallback("dashboard", requestId, function(result) {
-      Model.safeSet("dashboard", "dashboard", { data: result || null, isLoading: false });
-      console.log("[MODULE DASHBOARD] data loaded");
-      View.renderDashboardModule(Model.dashboard.data);
-    })).catch(this.guardModuleCallback("dashboard", requestId, function(error) {
-      Model.safeSet("dashboard", "dashboard", {
-        data: { error: error && error.message ? error.message : "Unable to load dashboard data." },
-        isLoading: false
-      });
-      console.log("[MODULE DASHBOARD] data loaded");
-      View.renderDashboardModule(Model.dashboard.data);
-    }));
-  },
-
-  initTypingModule: function() {
-    this.exitModule((Model.executionLock && Model.executionLock.activeModule) || null);
-    this.enterModule("typing");
-    console.log("[TYPING MODULE] Initialized");
-    Model.typing.batchId = "batch_" + Date.now();
-    Model.typing.students = [];
-    Model.typing.isSaving = false;
-    Model.typing.progress = {
-      total: 0,
-      saved: 0,
-      failed: 0
-    };
-    View.renderTypingModule();
-  },
-
-  normalizeTypingDateInput: function(value) {
-    return String(value || "").trim();
-  },
-
-  normalizeTypingNameInput: function(value) {
-    return String(value || "").trim().toUpperCase();
-  },
-
-  getTypingStudentFromForm: function() {
-    return {
-      dateReceived: this.normalizeTypingDateInput((document.getElementById("temp_date_received") || {}).value || ""),
-      studentName: this.normalizeTypingNameInput((document.getElementById("temp_student_name") || {}).value || ""),
-      hei: ((document.getElementById("temp_hei") || {}).value || "").trim(),
-      dateOfGraduation: this.normalizeTypingDateInput((document.getElementById("temp_date_graduation") || {}).value || ""),
-      program: ((document.getElementById("temp_program") || {}).value || "").trim()
-    };
-  },
-
-  resetTypingForm: function() {
-    ["temp_date_received", "temp_student_name", "temp_hei", "temp_date_graduation", "temp_program"].forEach(function(id) {
-      var el = document.getElementById(id);
-      if (el) el.value = "";
-    });
-  },
-
-  openTypingBatchModal: function() {
-    Model.typing.batchId = Model.typing.batchId || ("batch_" + Date.now());
-    Model.typing.students = Array.isArray(Model.typing.students) ? Model.typing.students : [];
-    this.resetTypingForm();
-    View.clearTypingValidationErrors();
-    View.renderTypingModule();
-    View.openTypingEditModal();
-  },
-
-  addManualBatchStudent: function() {
-    View.clearTypingValidationErrors();
-    var normalized = this.getTypingStudentFromForm();
-    View.setValue("temp_date_received", normalized.dateReceived);
-    View.setValue("temp_student_name", normalized.studentName);
-    View.setValue("temp_date_graduation", normalized.dateOfGraduation);
-
-    if (!normalized.dateReceived) {
-      View.setModalFieldError("temp_date_received", "Date Received is required.");
-      return;
-    }
-    if (!normalized.studentName) {
-      View.setModalFieldError("temp_student_name", "Name of the Student is required.");
-      return;
-    }
-    if (!normalized.hei) {
-      View.setModalFieldError("temp_hei", "HEI is required.");
-      return;
-    }
-    if (!normalized.dateOfGraduation) {
-      View.setModalFieldError("temp_date_graduation", "Date of Graduation is required.");
-      return;
-    }
-    if (!normalized.program) {
-      View.setModalFieldError("temp_program", "Program is required.");
-      return;
-    }
-
-    Model.typing.students.push(normalized);
-    this.resetTypingForm();
-    View.renderTypingModule();
-  },
-
-  removeTypingStudent: function(index) {
-    if (!Array.isArray(Model.typing.students)) return;
-    if (index < 0 || index >= Model.typing.students.length) return;
-    Model.typing.students.splice(index, 1);
-    View.renderTypingModule();
-    if (!Model.typing.students.length) {
-      View.closeTypingEditModal();
-    }
-  },
-
-  saveTypingBatch: async function() {
-    var requestId = this.getCurrentModuleRequestId();
-    var students = Array.isArray(Model.typing.students) ? Model.typing.students : [];
-    if (!students.length) {
-      console.log("[TYPING MODULE] No students to save");
-      return;
-    }
-
-    Model.typing.isSaving = true;
-    Model.typing.progress = {
-      total: students.length,
-      saved: 0,
-      failed: 0
-    };
-    View.renderTypingModule();
-
-    try {
-      var result = await Service.createTypingBatch({
-        batchId: Model.typing.batchId,
-        students: students
-      });
-      if (!this.validateModuleExecution("typing", requestId)) return;
-      var data = (result && result.data) || {};
-      Model.typing.progress = {
-        total: students.length,
-        saved: Number(data.inserted || 0),
-        failed: Number(data.failed || 0)
-      };
-
-      if (result && result.status === "SUCCESS") {
-        Model.typing.batchId = "batch_" + Date.now();
-        Model.typing.students = [];
-        View.closeTypingEditModal();
-        Controller.initData();
-      }
-    } catch (error) {
-      if (!this.validateModuleExecution("typing", requestId)) return;
-      Model.typing.progress = {
-        total: students.length,
-        saved: 0,
-        failed: students.length
-      };
-      console.log("[TYPING MODULE] Save failed");
-      console.log(error);
-    } finally {
-      Model.typing.isSaving = false;
-      View.renderTypingModule();
-    }
+    this.initData();
+    this.startDatabaseRowPolling();
   },
 
   initData: function() {
-    var targetModule = Model.activeModule === "typing" ? "typing" : "issuance";
+    var targetModule = "issuance";
     this.exitModule((Model.executionLock && Model.executionLock.activeModule) || null);
     var requestId = this.enterModule(targetModule);
     View.showOverlay(true);
@@ -405,7 +226,7 @@ var Controller = {
   },
 
   loadNextBatch: function(startRow) {
-    var targetModule = Model.activeModule === "typing" ? "typing" : "issuance";
+    var targetModule = "issuance";
     var requestId = this.getCurrentModuleRequestId();
     if (!Model.loadingBatches || startRow > (Model.totalRows + 1)) return;
     Service.loadRemainingData(startRow, Model.nextBatchSize, this.guardModuleCallback(targetModule, requestId, function(res){
@@ -456,7 +277,7 @@ var Controller = {
   },
 
   doSearch: function(term) {
-    var targetModule = Model.activeModule === "typing" ? "typing" : "issuance";
+    var targetModule = "issuance";
     var requestId = this.getCurrentModuleRequestId();
     var token = ++Model.activeSearchToken;
     term = (term || "").trim().toLowerCase();
@@ -1854,21 +1675,8 @@ var Controller = {
       updateClearButtonState(searchInput, searchClearBtn);
     }
 
-    var typingSearchInput = document.getElementById("typingSearchInput");
-    var typingSearchClearBtn = document.getElementById("typingSearchClearBtn");
-    if (typingSearchInput) {
-      typingSearchInput.addEventListener("input", function(e) {
-        updateClearButtonState(typingSearchInput, typingSearchClearBtn);
-        Controller.searchDebounced(e.target.value);
-      });
-    }
-    if (typingSearchClearBtn && typingSearchInput) {
-      typingSearchClearBtn.addEventListener("click", function() {
-        typingSearchInput.value = "";
-        updateClearButtonState(typingSearchInput, typingSearchClearBtn);
-        Controller.doSearch("");
-      });
-      updateClearButtonState(typingSearchInput, typingSearchClearBtn);
+    if (typeof TypingController !== "undefined" && TypingController && typeof TypingController.bindEvents === "function") {
+      TypingController.bindEvents();
     }
 
     var statusFilterMain = document.getElementById("statusFilterMain");
@@ -1980,17 +1788,6 @@ var Controller = {
       });
     }
 
-    var typingPageInput = document.getElementById("typingPageJumpInput");
-    var typingPageBtn = document.getElementById("typingPageJumpBtn");
-    if (typingPageBtn && typingPageInput) {
-      typingPageBtn.addEventListener("click", function() {
-        Controller.goToPage(typingPageInput.value);
-      });
-      typingPageInput.addEventListener("keydown", function(e) {
-        if (e.key === "Enter") Controller.goToPage(typingPageInput.value);
-      });
-    }
-
     Object.keys(this.formFieldMap).forEach(function(id) {
       var el = document.getElementById(id);
       if (!el) return;
@@ -2013,13 +1810,6 @@ var Controller = {
     if (editModal) {
       editModal.addEventListener("click", function(e) {
         if (e.target === editModal) View.closeEditModal();
-      });
-    }
-
-    var typingEditModal = document.getElementById("typingEditModal");
-    if (typingEditModal) {
-      typingEditModal.addEventListener("click", function(e) {
-        if (e.target === typingEditModal) View.closeTypingEditModal();
       });
     }
 

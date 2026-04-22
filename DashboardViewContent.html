@@ -1,0 +1,303 @@
+<nav class="app-navbar" aria-label="Primary navigation">
+  <div class="app-navbar-shell">
+    <div class="app-navbar-top">
+      <div class="app-navbar-logo-slot">
+        <div class="app-navbar-logo-placeholder is-loading" id="navbarLogoShell">
+          <div class="app-navbar-paper-panel">
+            <div class="app-navbar-logo-loading" id="navbarLogoLoading" aria-live="polite">
+              <span class="app-navbar-logo-loading-dot"></span>
+              <span>Loading logo</span>
+            </div>
+            <div class="app-navbar-paper-inner">
+              <img id="navbarLogoImage" class="app-navbar-logo-image d-none" alt="System logo">
+              <span id="navbarLogoFallback" class="app-navbar-logo-fallback">ITS</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="app-navbar-title-wrap">
+        <h1 class="app-navbar-title">Executive Analytics Dashboard</h1>
+      </div>
+      <div class="app-navbar-title-spacer" aria-hidden="true"></div>
+    </div>
+    <div class="app-navbar-navrow">
+      <div class="app-navbar-tabs">
+        <button type="button" class="app-navbar-link is-active" id="navDashboardBtn" data-view="dashboard" aria-pressed="true">
+          <i class="bi bi-graph-up-arrow" aria-hidden="true"></i>
+          <span>Dashboard</span>
+        </button>
+      </div>
+      <div class="app-navbar-account" aria-label="Current access mode">
+        <span id="accountName" class="app-navbar-account-name">ES II</span>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<main class="container page-shell">
+  <section class="search-filter-card">
+    <div class="search-filter-layout">
+      <div class="filter-row">
+        <div>
+          <div class="main-filter-title">Global Dashboard Filters</div>
+          <div class="main-filter-subtitle">Edit filters first, then apply once to refresh all cards, rankings, and people analytics together.</div>
+        </div>
+        <div class="filter-actions">
+          <button id="applyFiltersButton" class="btn btn-primary rounded-4" type="button">Apply Filters</button>
+          <button id="clearFiltersButton" class="btn btn-outline-secondary rounded-4" type="button">Clear Filters</button>
+          <button id="refreshButton" class="btn btn-gradient btn-icon-only rounded-circle" type="button" aria-label="Refresh analytics" title="Refresh analytics">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+      <div class="row g-3">
+        <div class="col-md-6 col-xl-2"><label class="form-label">ES II In-Charge</label><select id="filterEs2" class="form-select"></select></div>
+        <div class="col-md-6 col-xl-2"><label class="form-label">Program</label><select id="filterProgram" class="form-select"></select></div>
+        <div class="col-md-6 col-xl-2"><label class="form-label">Application Status</label><select id="filterStatus" class="form-select"></select></div>
+        <div class="col-md-6 col-xl-2"><label class="form-label">Transaction Type</label><select id="filterTransactionType" class="form-select"></select></div>
+        <div class="col-md-6 col-xl-2"><label class="form-label">HEI</label><select id="filterHei" class="form-select"></select></div>
+        <div class="col-md-6 col-xl-2"><label class="form-label">Date</label><select id="filterDatePreset" class="form-select"><option value="allTime">All Time</option><option value="thisYear">This Year</option><option value="yearToDate">Year to Date</option><option value="last30Days">Last 30 Days</option><option value="last90Days">Last 90 Days</option><option value="specificDate">Specific Date</option></select></div>
+        <div id="filterDateFromWrap" class="col-md-6 col-xl-1 d-none"><label class="form-label">From</label><input id="filterDateFrom" type="date" class="form-control"></div>
+        <div id="filterDateToWrap" class="col-md-6 col-xl-1 d-none"><label class="form-label">To</label><input id="filterDateTo" type="date" class="form-control"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="pageStatusBanner" class="dashboard-banner d-none" aria-live="polite"></section>
+
+  <section class="report-shell">
+    <div id="reportLoadingState" class="report-inline-loading d-none">
+      <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
+      <span id="reportLoadingText">Loading analytics...</span>
+    </div>
+
+    <div class="report-header-card">
+      <div>
+        <span class="report-placeholder-kicker">Analytics</span>
+        <h2 class="report-placeholder-title">Issuance Overview</h2>
+        <p class="report-placeholder-copy">Live summaries update from the dataset currently loaded in the dashboard.</p>
+      </div>
+      <div class="report-header-hints">
+        <div id="reportDatasetHint" class="report-dataset-hint"></div>
+        <div id="reportDataSourceHint" class="report-source-hint d-none"></div>
+      </div>
+      <section id="reportBatchLoadingState" class="report-batch-loading d-none" aria-live="polite" title="Loading more data">
+        <div class="report-batch-loading-bar"></div>
+        <span id="reportBatchLoadingText" class="visually-hidden">Loading more data...</span>
+      </section>
+    </div>
+
+    <div class="report-summary-grid" id="summaryCards"></div>
+
+    <section class="report-card report-card-scrollable">
+      <div class="report-card-header">
+        <div>
+          <h3>Workload by ES II Owner</h3>
+          <div class="report-card-copy">Approved, deficiency, processing or pending counts per ES II owner, with total volume in the last column.</div>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 analytics-table">
+          <thead><tr><th>ES II Owner</th><th>Approved</th><th>Deficiency</th><th>Processing / Pending</th><th>Total</th></tr></thead>
+          <tbody id="es2TableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="report-card">
+      <div class="report-card-header">
+        <div>
+          <h3>Top 10 Programs</h3>
+          <div class="report-card-copy">The ten programs with the highest application volume under the current filters.</div>
+        </div>
+      </div>
+      <div id="topProgramsBars"></div>
+    </section>
+
+    <div class="report-chart-grid report-chart-grid-balanced">
+      <section class="report-card report-card-scrollable">
+        <div class="report-card-header">
+          <div>
+            <h3>Overall Application Status</h3>
+            <div class="report-card-copy">Latest application standing per student, grouped into clear status buckets.</div>
+          </div>
+        </div>
+        <div id="overallStatusBars" class="report-bars report-scroll-body"></div>
+      </section>
+
+      <section class="report-card report-card-scrollable">
+        <div class="report-card-header">
+          <div>
+            <h3>Status Progression Overview</h3>
+            <div class="report-card-copy">How current records are distributed from evaluation through release.</div>
+          </div>
+        </div>
+        <div id="statusProgressionBars" class="report-bars report-scroll-body"></div>
+      </section>
+    </div>
+
+    <section class="report-card report-card-scrollable">
+      <div class="report-card-header">
+        <div>
+          <h3>Turnaround Time Analytics</h3>
+          <div class="report-card-copy">Elapsed days measured from the earliest available stage date to the latest available stage date in the tracked issuance sequence.</div>
+        </div>
+      </div>
+      <div class="row g-4 align-items-start">
+        <div class="col-xl-4">
+          <div id="turnaroundSummary" class="report-summary-grid turnaround-summary-grid"></div>
+          <div id="turnaroundHighlights" class="mt-3"></div>
+        </div>
+        <div class="col-xl-8">
+          <div id="turnaroundGroups" class="row g-3"></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="report-chart-grid report-chart-grid-balanced">
+      <section class="report-card report-card-scrollable">
+        <div class="report-card-header">
+          <div>
+            <h3>Document Location Load</h3>
+            <div class="report-card-copy">Current document counts by clean, readable location buckets.</div>
+          </div>
+        </div>
+        <div id="locationLoadBars" class="report-bars report-scroll-body"></div>
+      </section>
+
+      <section class="report-card report-card-scrollable">
+        <div class="report-card-header">
+          <div>
+            <h3>Monthly Application Volume</h3>
+            <div class="report-card-copy">Monthly intake shown from the newest month to the oldest month.</div>
+          </div>
+          <div class="report-card-header-actions">
+            <label for="monthlyYearSelect" class="form-label mb-0">Year</label>
+            <select id="monthlyYearSelect" class="form-select form-select-sm monthly-year-select"></select>
+          </div>
+        </div>
+        <div id="monthlyVolumeBars" class="report-bars report-scroll-body"></div>
+      </section>
+    </div>
+
+    <div class="report-chart-grid report-chart-grid-balanced">
+      <section class="report-card report-card-scrollable">
+        <div class="report-card-header">
+          <div>
+            <h3>SLA Exposure</h3>
+            <div class="report-card-copy">Active records approaching or passing their target release date.</div>
+          </div>
+        </div>
+        <div id="slaExposureBars" class="report-bars report-scroll-body"></div>
+      </section>
+
+      <section class="report-card report-card-scrollable">
+        <div class="report-card-header">
+          <div>
+            <h3>Workflow Backlog</h3>
+            <div class="report-card-copy">Latest active records currently waiting in each workflow stage.</div>
+          </div>
+        </div>
+        <div id="stageBacklogBars" class="report-bars report-scroll-body"></div>
+      </section>
+    </div>
+
+    <section class="report-card">
+      <div class="report-card-header">
+        <div>
+          <h3>Assigned Staff Activity</h3>
+          <div class="report-card-copy">Completed, pending, and total handled counts by assigned staff.</div>
+        </div>
+      </div>
+      <div id="productivityChart" class="report-chart-block mb-3"></div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 analytics-table">
+          <thead><tr><th>Assigned Staff</th><th>Completed</th><th>Pending</th><th>Total Handled</th></tr></thead>
+          <tbody id="productivityTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </section>
+</main>
+
+<div class="modal fade" id="detailModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable analytics-modal-dialog">
+    <div class="modal-content analytics-modal analytics-modal-wide" id="detailModalContent">
+      <div class="modal-header analytics-modal-header">
+        <div>
+          <div id="detailModalKicker" class="modal-kicker">Detail</div>
+          <h5 id="detailModalTitle" class="modal-title mb-0">Analytics Detail</h5>
+          <div id="detailModalLoadingState" class="analytics-modal-loading-state d-none">Loading records...</div>
+          <div id="detailModalMeta" class="analytics-modal-loading-state d-none"></div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body analytics-modal-body">
+        <div id="detailModalSummary" class="modal-summary-grid"></div>
+        <div class="report-chart-grid mt-3">
+          <section class="report-card report-card-compact report-card-scrollable">
+            <div class="report-card-header mb-2">
+              <div>
+                <h3>Programs</h3>
+              </div>
+            </div>
+            <div id="detailModalPrograms" class="report-bars report-scroll-body"></div>
+          </section>
+          <section class="report-card report-card-compact report-card-scrollable">
+            <div class="report-card-header mb-2">
+              <div>
+                <h3>Transaction Type</h3>
+              </div>
+            </div>
+            <div id="detailModalTransactionTypes" class="report-bars report-scroll-body"></div>
+          </section>
+        </div>
+        <div class="report-chart-grid mt-3">
+          <section class="report-card report-card-compact report-card-scrollable">
+            <div class="report-card-header mb-2">
+              <div>
+                <h3>Overall Status</h3>
+              </div>
+            </div>
+            <div id="detailModalOverallStatus" class="report-bars report-scroll-body"></div>
+          </section>
+          <section class="report-card report-card-compact report-card-scrollable">
+            <div class="report-card-header mb-2">
+              <div>
+                <h3>Status Progression</h3>
+              </div>
+            </div>
+            <div id="detailModalProgression" class="report-bars report-scroll-body"></div>
+          </section>
+        </div>
+        <section class="report-card report-card-compact report-card-scrollable mt-3">
+          <div class="report-card-header mb-2">
+            <div>
+              <h3>Current Locations</h3>
+            </div>
+          </div>
+          <div id="detailModalLocations" class="report-bars report-scroll-body"></div>
+        </section>
+        <section class="report-card report-card-compact mt-3">
+          <div class="report-card-header">
+            <div>
+              <h3>Current Filtered Records</h3>
+              <div class="report-card-copy">Compact record list for the selected person under the active dashboard filters.</div>
+            </div>
+          </div>
+          <div class="table-responsive modal-records-scroller">
+            <table class="table table-hover align-middle mb-0 analytics-table">
+              <thead id="detailModalTableHead"></thead>
+              <tbody id="detailModalTableBody"></tbody>
+            </table>
+          </div>
+          <div class="d-flex justify-content-between align-items-center gap-3 mt-3">
+            <button id="detailModalPrevPage" type="button" class="btn btn-outline-secondary btn-sm">Previous</button>
+            <div id="detailModalPageStatus" class="report-card-copy text-center flex-grow-1">Page 1 of 1</div>
+            <button id="detailModalNextPage" type="button" class="btn btn-outline-secondary btn-sm">Next</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>

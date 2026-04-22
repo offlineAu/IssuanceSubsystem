@@ -2,16 +2,13 @@
   <div class="app-navbar-shell">
     <div class="app-navbar-top">
       <div class="app-navbar-logo-slot">
-        <div class="app-navbar-logo-placeholder is-loading" id="navbarLogoShell">
-          <div class="app-navbar-paper-panel">
-            <div class="app-navbar-logo-loading" id="navbarLogoLoading" aria-live="polite">
-              <span class="app-navbar-logo-loading-dot"></span>
-              <span>Loading logo</span>
-            </div>
-            <div class="app-navbar-paper-inner">
-              <img id="navbarLogoImage" class="app-navbar-logo-image d-none" alt="System logo">
-              <span id="navbarLogoFallback" class="app-navbar-logo-fallback">ITS</span>
-            </div>
+        <div class="app-navbar-logo-panel" id="navbarLogoShell">
+          <div class="app-navbar-logo-loading d-none" id="navbarLogoLoading">
+            <span class="spinner-border spinner-border-sm" role="status"></span>
+          </div>
+          <div class="app-navbar-logo-inner">
+            <img id="navbarLogoImage" class="app-navbar-logo-image d-none" alt="System logo">
+            <span id="navbarLogoFallback" class="app-navbar-logo-fallback">ITS</span>
           </div>
         </div>
       </div>
@@ -26,11 +23,9 @@
         <span id="accountName" class="app-navbar-account-name">
           <span class="account-name-loading">
             <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-            <span>Loading...</span>
+            <span>Loading profile...</span>
           </span>
         </span>
-        <div id="currentModuleIndicator">Current Module: -</div>
-        <div id="noModuleAssignedMessage" class="d-none">No module assigned</div>
       </div>
       <div class="app-navbar-tabs">
         <button type="button" class="app-navbar-link is-active" id="navHomeBtn" data-view="home" aria-pressed="true">
@@ -41,7 +36,7 @@
           <i class="bi bi-graph-up-arrow" aria-hidden="true"></i>
           <span>Report</span>
         </button>
-        <button type="button" class="app-navbar-link" id="navHistoryBtn">
+        <button type="button" class="app-navbar-link" id="navHistoryBtn" data-view="history" aria-pressed="false">
           <i class="bi bi-clock-history" aria-hidden="true"></i>
           <span>History</span>
         </button>
@@ -49,3 +44,113 @@
     </div>
   </div>
 </nav>
+
+<style>
+/* Modern Dashboard Style Navbar */
+.app-navbar {
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.75rem 1.5rem;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.app-navbar-shell {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.app-navbar-top {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.app-navbar-logo-slot {
+  flex: 0 0 auto;
+}
+
+.app-navbar-logo-panel {
+  width: 44px;
+  height: 44px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.app-navbar-logo-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.app-navbar-logo-fallback {
+  font-weight: 800;
+  color: #1f429b;
+  font-size: 0.9rem;
+  letter-spacing: -0.02em;
+}
+
+.app-navbar-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.app-navbar-navrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.app-navbar-account-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.app-navbar-tabs {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.app-navbar-link {
+  border: none;
+  background: transparent;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 0.875rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.2s ease;
+}
+
+.app-navbar-link:hover {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+.app-navbar-link.is-active {
+  background: #eff6ff;
+  color: #1f429b;
+}
+
+.account-name-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+</style>

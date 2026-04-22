@@ -1,0 +1,510 @@
+<script>
+var TypingModel = {
+  fullData: [],
+  filteredData: [],
+  batchStudents: [],
+  editingRowID: null,
+  inlineBatchEditRowID: null,
+  previewSO: null,
+  searchMode: false,
+  activeSearchToken: 0,
+  currentPage: 1,
+  rowsPerPage: 10,
+  totalRows: 0,
+  nextBatchStart: 2,
+  nextBatchSize: 20000,
+  initialBatchSize: 1000,
+  loadingBatches: false,
+  autoPrefillDisabled: false,
+  dateSyncInProgress: false,
+  soPrefixes: [],
+  batchConfirmed: false,
+  batchHasChanges: false,
+  verificationFilterMain: ["verified", "deficiency", "unverified"],
+  verificationFilterModal: ["verified", "deficiency", "unverified"],
+  activeBatchSearchToken: 0,
+  lastMainSearchTerm: "",
+  lastBatchSearchTerm: "",
+  isSearchingMain: false,
+  listenersBound: false,
+  lastFocusedStudentRow: null,
+  historyRows: [],
+  saveFailureRows: [],
+  localSaveFailureRows: [],
+  isHistoryLoading: false,
+  isSaveFailureLoading: false,
+  isSavingBatch: false,
+  activeSaveRequests: 0,
+  saveRequestQueue: [],
+  currentSavingBatchId: "",
+  currentSavingBatchTotal: 0,
+  currentSavingBatchCompleted: 0,
+  currentSavingBatchLastSavedName: "",
+  userRole: "Viewer",
+  executionLock: {
+    activeModule: "typing",
+    requestId: 1
+  },
+  accessContext: {
+    email: "",
+    knownUser: false,
+    name: "",
+    position: "",
+    accessType: "",
+    profileId: "",
+    scope: "all",
+    actions: { create: false, read: true, update: false, delete: false },
+    isPrivileged: false,
+    editableFieldKeys: [],
+    readOnlyFieldKeys: [],
+    canUpdateAny: false,
+    canEditRecord: false,
+    isAssigned: false,
+    assignmentColumn: "",
+    denyReason: ""
+  },
+  userDebugInfo: {
+    activeEmail: "",
+    effectiveEmail: "",
+    resolvedEmail: "",
+    resolvedSource: "",
+    userFound: false,
+    profileFound: false,
+    denyReason: ""
+  },
+  userPositionFieldSchema: {
+    sessionEmail: "",
+    source: "",
+    position: "",
+    accessType: "",
+    profileId: "",
+    knownUser: false,
+    isPrivileged: false,
+    fields: [],
+    placeholderFields: [],
+    liveIssuanceFields: [],
+    denyReason: ""
+  },
+  recordViewConfig: {
+    mode: "developer",
+    supportsIssuanceEditor: true,
+    showVerificationFilters: false,
+    dataColumns: [],
+    tableColumns: [],
+    modalFields: []
+  },
+  staticOptions: {
+    heiOptions: [],
+    programOptions: [],
+    heiLookup: {},
+    releaseOffsetDays: 7,
+    defaultTransactionType: "Airl",
+    defaultStatusOfApplication: "",
+    defaultEss2InCharge: ""
+  },
+  currentRecordPermissions: {
+    canEditRecord: true,
+    isAssigned: true,
+    editableFieldKeys: ["dateReceived", "studentName", "hei", "dateGraduation", "program"],
+    readOnlyFieldKeys: [],
+    assignmentValue: "",
+    denyReason: ""
+  },
+  lastDatabaseUpdateAt: "0",
+  isSyncingRow: false,
+  statusEditConfirmed: false,
+  activeMainView: "home",
+  historyLoadedOnce: false,
+  historyFailureLoadedOnce: false,
+  activeHistorySection: "success",
+  lastSaveOutcomeSummary: "",
+
+  mergeObjects: function(target, patch) {
+    var result = {};
+    var first = target || {};
+    var second = patch || {};
+    var firstKeys = Object.keys(first);
+    for (var i = 0; i < firstKeys.length; i++) {
+      var key = firstKeys[i];
+      result[key] = first[key];
+    }
+    var secondKeys = Object.keys(second);
+    for (var j = 0; j < secondKeys.length; j++) {
+      var key2 = secondKeys[j];
+      result[key2] = second[key2];
+    }
+    return result;
+  },
+
+  setEditingRow: function(id) {
+    this.editingRowID = id;
+  },
+
+  clearEditing: function() {
+    this.editingRowID = null;
+    this.inlineBatchEditRowID = null;
+    this.previewSO = null;
+    this.batchStudents = [];
+    this.batchConfirmed = false;
+    this.batchHasChanges = false;
+    this.statusEditConfirmed = false;
+    this.currentRecordPermissions = {
+      canEditRecord: true,
+      isAssigned: true,
+      editableFieldKeys: ["dateReceived", "studentName", "hei", "dateGraduation", "program"],
+      readOnlyFieldKeys: [],
+      assignmentValue: "",
+      denyReason: ""
+    };
+  },
+
+  setLastFocusedStudent: function(rowID) {
+    this.lastFocusedStudentRow = rowID ? String(rowID) : null;
+  },
+
+  getCurrentStudent: function() {
+    return this.fullData.find(function(r) { return String(r._row) === String(Model.editingRowID); });
+  },
+
+  shouldUseVerificationFilter: function() {
+    return !!(this.recordViewConfig && this.recordViewConfig.showVerificationFilters);
+  },
+
+  applyMainViewFilters: function(rows) {
+    var source = Array.isArray(rows) ? rows : [];
+    if (!this.shouldUseVerificationFilter()) return source.slice();
+    return source.filter(function(r) {
+      return Model.passesVerificationFilter(r["Verification Status"], Model.verificationFilterMain);
+    });
+  },
+
+  evaluateRecordPermissions: function(student) {
+    var base = this.accessContext || {};
+    var editableFieldKeys = Array.isArray(base.editableFieldKeys) && base.editableFieldKeys.length
+      ? base.editableFieldKeys.slice()
+      : ["dateReceived", "studentName", "hei", "dateGraduation", "program"];
+    var assignmentColumn = String(base.assignmentColumn || "");
+    var assignmentValue = student && assignmentColumn ? String(student[assignmentColumn] || "").trim() : "";
+    return {
+      canEditRecord: true,
+      isAssigned: true,
+      editableFieldKeys: editableFieldKeys,
+      readOnlyFieldKeys: Array.isArray(base.readOnlyFieldKeys) ? base.readOnlyFieldKeys.slice() : [],
+      assignmentValue: assignmentValue,
+      denyReason: ""
+    };
+  },
+
+  parseSoNo: function(soNo) {
+    var raw = String(soNo || "").trim();
+    if (!raw) return { prefix: "", number: "", normalized: "" };
+    var parts = raw.split("-");
+    if (parts.length < 2) return { prefix: raw, number: "", normalized: raw };
+    var prefix = String(parts[0] || "").trim();
+    var number = String(parts.slice(1).join("-") || "").trim();
+    return { prefix: prefix, number: number, normalized: prefix && number ? (prefix + "-" + number) : raw };
+  },
+
+  formatSoNo: function(prefix, number) {
+    var p = String(prefix || "").trim();
+    var n = String(number || "").trim();
+    if (!p || !n) return "";
+    return p + "-" + n;
+  },
+
+  normalizeStudentToBatchEntry: function(student) {
+    return {
+      _row: student._row,
+      ID: student.ID || "",
+      name: student["Name of the Student"] || "",
+      HEI: student.HEI || "",
+      hasExistingSO: false,
+      existingSO: "",
+      previewSO: "",
+      overrides: this.getDefaultOverrides(),
+      fields: {
+        dateReceived: "",
+        studentName: student["Name of the Student"] || "",
+        hei: student["HEI"] || "",
+        dateGraduation: student["Date of Graduation"] || "",
+        program: student["Program"] || "",
+        targetReleaseDate: "",
+        transactionType: "",
+        heiAddress: "",
+        ess2InCharge: "",
+        statusOfApplication: ""
+      },
+      originalFields: {
+        dateReceived: "",
+        studentName: student["Name of the Student"] || "",
+        hei: student["HEI"] || "",
+        dateGraduation: student["Date of Graduation"] || "",
+        program: student["Program"] || "",
+        targetReleaseDate: "",
+        transactionType: "",
+        heiAddress: "",
+        ess2InCharge: "",
+        statusOfApplication: ""
+      },
+      originalPreviewSO: ""
+    };
+  },
+
+  createManualBatchEntry: function(data) {
+    var now = new Date().getTime();
+    return {
+      _row: "manual-" + now + "-" + Math.floor(Math.random() * 1000),
+      ID: "",
+      name: data && data.studentName ? data.studentName : "",
+      HEI: data && data.hei ? data.hei : "",
+      hasExistingSO: false,
+      existingSO: "",
+      previewSO: "",
+      overrides: this.getDefaultOverrides(),
+      fields: {
+        dateReceived: data && data.dateReceived ? data.dateReceived : "",
+        studentName: data && data.studentName ? data.studentName : "",
+        hei: data && data.hei ? data.hei : "",
+        dateGraduation: data && data.dateGraduation ? data.dateGraduation : "",
+        program: data && data.program ? data.program : "",
+        targetReleaseDate: "",
+        transactionType: "",
+        heiAddress: "",
+        ess2InCharge: "",
+        statusOfApplication: "",
+        orNo: "",
+        orDateIssued: "",
+        dateReturnByChaCha: ""
+      },
+      originalFields: {
+        dateReceived: "",
+        studentName: "",
+        hei: "",
+        dateGraduation: "",
+        program: "",
+        targetReleaseDate: "",
+        transactionType: "",
+        heiAddress: "",
+        ess2InCharge: "",
+        statusOfApplication: "",
+        orNo: "",
+        orDateIssued: "",
+        dateReturnByChaCha: ""
+      },
+      originalPreviewSO: ""
+    };
+  },
+
+  getDefaultOverrides: function() {
+    return {
+      dateReceived: false
+    };
+  },
+
+  getBatchEntryByRow: function(rowID) {
+    return this.batchStudents.find(function(s) { return String(s._row) === String(rowID); }) || null;
+  },
+
+  getCurrentBatchEntry: function() {
+    return this.getBatchEntryByRow(this.editingRowID);
+  },
+
+  getVerificationCategory: function(statusValue) {
+    var raw = String(statusValue || "").trim().toLowerCase();
+    if (!raw) return "unverified";
+    if (raw.indexOf("deficien") !== -1) return "deficiency";
+    if (raw.indexOf("verif") !== -1 || raw === "approved" || raw === "complete" || raw === "completed") return "verified";
+    return "unverified";
+  },
+
+  passesVerificationFilter: function(statusValue, filterMode) {
+    var category = this.getVerificationCategory(statusValue);
+    if (Array.isArray(filterMode)) {
+      if (!filterMode.length) return false;
+      return filterMode.indexOf(category) !== -1;
+    }
+    var mode = String(filterMode || "all");
+    if (mode === "all") return true;
+    return category === mode;
+  },
+
+  getFirstWithoutSOEntry: function() {
+    for (var i = 0; i < this.batchStudents.length; i++) {
+      if (!this.batchStudents[i].hasExistingSO) return this.batchStudents[i];
+    }
+    return null;
+  },
+
+  removeDuplicates: function(arr) {
+    var map = {};
+    arr.forEach(function(r){
+      var key = r && r._row ? "_row_" + r._row : "id_" + String(r.ID || "");
+      map[key] = r;
+    });
+    return Object.values(map);
+  },
+
+  getCurrentFormData: function() {
+    return {
+      dateReceived: document.getElementById("temp_date_received") ? document.getElementById("temp_date_received").value : "",
+      studentName: document.getElementById("temp_student_name") ? document.getElementById("temp_student_name").value : "",
+      hei: document.getElementById("temp_hei") ? document.getElementById("temp_hei").value : "",
+      dateGraduation: document.getElementById("temp_date_graduation") ? document.getElementById("temp_date_graduation").value : "",
+      program: document.getElementById("temp_program") ? document.getElementById("temp_program").value : "",
+      targetReleaseDate: document.getElementById("temp_target_release_date") ? document.getElementById("temp_target_release_date").value : "",
+      transactionType: document.getElementById("temp_transaction_type") ? document.getElementById("temp_transaction_type").value : "",
+      heiAddress: document.getElementById("temp_hei_address") ? document.getElementById("temp_hei_address").value : "",
+      ess2InCharge: document.getElementById("temp_ess2_incharge") ? document.getElementById("temp_ess2_incharge").value : "",
+      statusOfApplication: document.getElementById("temp_status_of_application") ? document.getElementById("temp_status_of_application").value : ""
+    };
+  },
+
+  setBatchStudents: function(students) {
+    this.batchStudents = students;
+    this.batchConfirmed = false;
+    this.batchHasChanges = this.isBatchDirty();
+  },
+
+  addBatchStudents: function(students) {
+    this.batchStudents = this.batchStudents.concat(students);
+  },
+
+  isBatchSelected: function(rowID) {
+    return this.batchStudents.some(function(s) { return String(s._row) === String(rowID); });
+  },
+
+  addBatchStudent: function(studentOrEntry) {
+    if (!studentOrEntry) return;
+    var entry = studentOrEntry.fields ? studentOrEntry : this.normalizeStudentToBatchEntry(studentOrEntry);
+    if (this.isBatchSelected(entry._row)) return;
+    this.batchStudents.push(entry);
+    this.batchConfirmed = false;
+    this.batchHasChanges = this.isBatchDirty();
+  },
+
+  removeBatchStudent: function(rowID) {
+    this.batchStudents = this.batchStudents.filter(function(s) { return String(s._row) !== String(rowID); });
+    this.batchConfirmed = false;
+    this.batchHasChanges = this.isBatchDirty();
+  },
+
+  updateBatchEntryFields: function(rowID, patch) {
+    var entry = this.getBatchEntryByRow(rowID);
+    if (!entry || !patch) return;
+    var changed = false;
+    var keys = Object.keys(patch);
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      var before = String((entry.fields || {})[key] || "");
+      var after = String(patch[key] || "");
+      if (before !== after) {
+        changed = true;
+        break;
+      }
+    }
+    entry.fields = this.mergeObjects(entry.fields, patch);
+    if (changed) this.batchConfirmed = false;
+    this.batchHasChanges = this.isBatchDirty();
+  },
+
+  toNumberAndWidth: function(numberStr) {
+    var raw = String(numberStr || "").trim();
+    var width = raw.length;
+    if (!raw) return { value: 0, width: 0 };
+    var n = Number(raw);
+    if (isNaN(n)) return { value: 0, width: width };
+    return { value: n, width: width };
+  },
+
+  formatWithWidth: function(num, width) {
+    var n = String(num);
+    var w = Math.max(Number(width) || 0, n.length);
+    while (n.length < w) n = "0" + n;
+    return n;
+  },
+
+  getMaxNumberInfoForPrefix: function(prefix) {
+    var max = 0;
+    var width = 4;
+    var p = String(prefix || "").trim();
+    if (!p) return { value: max, width: width };
+    this.fullData.forEach(function(s) {
+      var parsed = Model.parseSoNo(s["SO No."]);
+      if (parsed.prefix === p) {
+        var info = Model.toNumberAndWidth(parsed.number);
+        if (info.width > width) width = info.width;
+        if (info.value > max) max = info.value;
+      }
+    });
+    return { value: max, width: width };
+  },
+
+  getIncrementedSO: function(prefix, currentValue, width) {
+    var info = this.toNumberAndWidth(currentValue);
+    var next = info.value + 1;
+    var useWidth = Math.max(width || 0, info.width || 0, 1);
+    return String(prefix || "").trim() + "-" + this.formatWithWidth(next, useWidth);
+  },
+
+  isBatchDirty: function() {
+    if (!this.batchStudents.length) return false;
+    for (var i = 0; i < this.batchStudents.length; i++) {
+      var entry = this.batchStudents[i];
+      var keys = Object.keys(entry.fields || {});
+      for (var k = 0; k < keys.length; k++) {
+        var key = keys[k];
+        var curr = String(entry.fields[key] || "");
+        var orig = String((entry.originalFields || {})[key] || "");
+        if (curr !== orig) return true;
+      }
+    }
+    return false;
+  },
+
+  getAllUsedSoNos: function() {
+    var used = {};
+    this.fullData.forEach(function(s) {
+      var so = String(s["SO No."] || "").trim();
+      if (so) used[so] = true;
+    });
+    return used;
+  },
+
+  getFirstAvailablePrefix: function() {
+    var first = "";
+    for (var i = 0; i < this.fullData.length; i++) {
+      var parsed = this.parseSoNo(this.fullData[i]["SO No."]);
+      if (parsed.prefix) {
+        first = parsed.prefix;
+        break;
+      }
+    }
+    if (!first) first = "401002";
+    return first;
+  },
+
+  getMaxNumberForPrefix: function(prefix) {
+    var max = 0;
+    var p = String(prefix || "").trim();
+    if (!p) return max;
+    this.fullData.forEach(function(s) {
+      var parsed = Model.parseSoNo(s["SO No."]);
+      if (parsed.prefix === p) {
+        var n = Number(parsed.number);
+        if (!isNaN(n) && n > max) max = n;
+      }
+    });
+    return max;
+  },
+
+  recomputeBatchSoPreviews: function() {
+    this.batchStudents.forEach(function(entry) {
+      entry.previewSO = "";
+      entry.hasExistingSO = false;
+      entry.isFirstWithoutSO = false;
+    });
+  }
+};
+
+var Model = TypingModel;
+</script>

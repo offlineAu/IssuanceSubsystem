@@ -1,0 +1,461 @@
+<script>
+var TypingController = {
+  formFieldMap: {
+    temp_date_received: "dateReceived",
+    temp_student_name: "studentName",
+    temp_hei: "hei",
+    temp_date_graduation: "dateGraduation",
+    temp_program: "program"
+  },
+
+  validationFieldMap: {
+    dateReceived: { id: "temp_date_received", label: "Date Received" },
+    studentName: { id: "temp_student_name", label: "Name of the Student" },
+    hei: { id: "temp_hei", label: "HEI" },
+    dateGraduation: { id: "temp_date_graduation", label: "Date of Graduation" },
+    program: { id: "temp_program", label: "Program" }
+  },
+
+  searchDebounced: null,
+  pendingSaveTargets: null,
+
+  setActiveMainView: function(viewName) {
+    var nextView = viewName === "history" ? "history" : "home";
+    Model.activeMainView = nextView;
+    View.setActiveMainView(nextView);
+    if (nextView === "history") {
+      this.setActiveHistorySection(Model.activeHistorySection || "success");
+    }
+  },
+
+  init: function() {
+    this.initEventListeners();
+    this.loadNavbarLogo();
+    this.loadAccountName();
+    this.loadUserRole();
+    this.setActiveMainView("home");
+    this.initData();
+    this.startDatabaseRowPolling();
+  },
+
+  initData: function(options) {
+    var settings = options || {};
+    if (!settings.silent) View.showOverlay(true);
+    Service.getInitialData(Model.initialBatchSize, function(res){
+      Model.recordViewConfig = res.viewConfig || Model.recordViewConfig;
+      Model.staticOptions = res.staticOptions || Model.staticOptions;
+      View.applyRecordViewConfig();
+      View.populateStaticSelectOptions();
+      Model.fullData = res.data;
+      Model.totalRows = res.total;
+      Model.filteredData = Model.applyMainViewFilters(Model.fullData);
+      TypingController.renderPage(1);
+      if (!settings.silent) View.showOverlay(false);
+    });
+  },
+
+  renderPage: function(page) {
+    var totalPages = Math.max(1, Math.ceil(Model.filteredData.length / Model.rowsPerPage));
+    var safePage = Number(page) || 1;
+    if (safePage < 1) safePage = 1;
+    if (safePage > totalPages) safePage = totalPages;
+    Model.currentPage = safePage;
+    View.renderPage(safePage);
+  },
+
+  debounce: function(fn, wait) {
+    var timer = null;
+    return function() {
+      var ctx = this;
+      var args = arguments;
+      clearTimeout(timer);
+      timer = setTimeout(function() { fn.apply(ctx, args); }, wait);
+    };
+  },
+
+  doSearch: function(term) {
+    var token = ++Model.activeSearchToken;
+    term = (term || "").trim().toLowerCase();
+    Model.lastMainSearchTerm = term;
+    Model.isSearchingMain = false;
+
+    if (!term) {
+      Model.searchMode = false;
+      Model.filteredData = Model.applyMainViewFilters(Model.fullData);
+      this.renderPage(1);
+      return;
+    }
+
+    Model.searchMode = true;
+    var localMatch = Model.fullData.filter(function(r){
+      return r["Name of the Student"] && r["Name of the Student"].toLowerCase().includes(term);
+    });
+    var filteredLocal = Model.applyMainViewFilters(localMatch);
+
+    if (filteredLocal.length) {
+      Model.filteredData = Model.removeDuplicates(filteredLocal);
+      this.renderPage(1);
+    } else {
+      Model.isSearchingMain = true;
+      View.showMainSearchLoading();
+      Service.searchExactName(term, function(res){
+        if (token !== Model.activeSearchToken) return;
+        Model.isSearchingMain = false;
+        if (res && res.length) {
+          var filteredRemote = Model.applyMainViewFilters(res);
+          if (!filteredRemote.length) {
+            View.renderEmpty("No records found");
+            return;
+          }
+          Model.filteredData = Model.removeDuplicates(filteredRemote);
+          TypingController.renderPage(1);
+        } else {
+          View.renderEmpty("No records found");
+        }
+      });
+    }
+  },
+
+  getFormPatch: function() {
+    return {
+      dateReceived: this.normalizeIsoDateInput((document.getElementById("temp_date_received") || {}).value || ""),
+      studentName: (document.getElementById("temp_student_name") || {}).value || "",
+      hei: (document.getElementById("temp_hei") || {}).value || "",
+      dateGraduation: this.normalizeIsoDateInput((document.getElementById("temp_date_graduation") || {}).value || ""),
+      program: (document.getElementById("temp_program") || {}).value || ""
+    };
+  },
+
+  normalizeNameInput: function(value) {
+    return String(value || "").toUpperCase();
+  },
+
+  pad2: function(value) {
+    var text = String(value == null ? "" : value);
+    return text.length < 2 ? "0" + text : text;
+  },
+
+  mergeObjects: function() {
+    var result = {};
+    for (var i = 0; i < arguments.length; i++) {
+      var source = arguments[i] || {};
+      var keys = Object.keys(source);
+      for (var k = 0; k < keys.length; k++) {
+        var key = keys[k];
+        result[key] = source[key];
+      }
+    }
+    return result;
+  },
+
+  normalizeIsoDateInput: function(value) {
+    var raw = String(value || "").trim();
+    if (!raw) return "";
+    var match = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (match) {
+      return match[1] + "-" + this.pad2(Number(match[2])) + "-" + this.pad2(Number(match[3]));
+    }
+    match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (match) {
+      return match[3] + "-" + this.pad2(Number(match[1])) + "-" + this.pad2(Number(match[2]));
+    }
+    var parsed = new Date(raw);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.getFullYear() + "-" +
+        this.pad2(parsed.getMonth() + 1) + "-" +
+        this.pad2(parsed.getDate());
+    }
+    return raw;
+  },
+
+  addDaysToIso: function(value, days) {
+    if (!value) return "";
+    var parts = String(value).split("-");
+    if (parts.length !== 3) return "";
+    var date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    if (isNaN(date.getTime())) return "";
+    date.setDate(date.getDate() + Number(days || 0));
+    return date.getFullYear() + "-" +
+      this.pad2(date.getMonth() + 1) + "-" +
+      this.pad2(date.getDate());
+  },
+
+  refreshDerivedFields: function(entry) {
+    if (!entry) return;
+    var staticOptions = Model.staticOptions || {};
+    var heiKey = String(entry.fields.hei || "").trim().toLowerCase();
+    var heiLookup = (staticOptions.heiLookup || {})[heiKey] || {};
+    entry.fields.targetReleaseDate = entry.fields.dateReceived
+      ? this.addDaysToIso(entry.fields.dateReceived, staticOptions.releaseOffsetDays || 7)
+      : "";
+    entry.fields.transactionType = heiLookup.transactionType || staticOptions.defaultTransactionType || "Airl";
+    entry.fields.heiAddress = heiLookup.heiAddress || "";
+    entry.fields.ess2InCharge = heiLookup.ess2InCharge || staticOptions.defaultEss2InCharge || "";
+    entry.fields.statusOfApplication = heiLookup.statusOfApplication || staticOptions.defaultStatusOfApplication || "";
+  },
+
+  loadTempPrefillForEntry: function(entry, updateForm) {
+    if (!entry) return;
+    if (!/^\d+$/.test(String(entry._row || ""))) {
+      this.refreshDerivedFields(entry);
+      if (updateForm && String(Model.editingRowID) === String(entry._row)) {
+        View.populateEditForm(entry);
+      }
+      View.renderSelectedBatchList();
+      return;
+    }
+    Service.getTempRecordPrefill(entry._row, entry.fields.dateReceived || "", function(prefill) {
+      if (!prefill) return;
+      var liveEntry = Model.getBatchEntryByRow(entry._row);
+      if (!liveEntry) return;
+      liveEntry.fields = TypingController.mergeObjects(liveEntry.fields, {
+        studentName: prefill.studentName || liveEntry.fields.studentName || "",
+        hei: prefill.hei || liveEntry.fields.hei || "",
+        dateGraduation: prefill.dateGraduation || "",
+        program: prefill.program || "",
+        targetReleaseDate: prefill.targetReleaseDate || "",
+        transactionType: prefill.transactionType || "",
+        heiAddress: prefill.heiAddress || "",
+        ess2InCharge: prefill.ess2InCharge || "",
+        statusOfApplication: prefill.statusOfApplication || ""
+      });
+      if (updateForm && String(Model.editingRowID) === String(liveEntry._row)) {
+        View.populateEditForm(liveEntry);
+      }
+      View.renderSelectedBatchList();
+    });
+  },
+
+  syncCurrentFormToModel: function(changedField) {
+    var entry = Model.getCurrentBatchEntry();
+    if (!entry) return;
+    View.clearModalActionError("savebtn");
+    View.clearModalActionError("updateStudentBtn");
+
+    var patch = this.getFormPatch();
+    Model.updateBatchEntryFields(entry._row, patch);
+    this.refreshDerivedFields(entry);
+    
+    Model.recomputeBatchSoPreviews();
+    Model.batchHasChanges = Model.isBatchDirty();
+    View.renderSelectedBatchList();
+    View.updateActionButtons();
+    this.loadTempPrefillForEntry(entry, true);
+  },
+
+  openManualBatchModal: function() {
+    Model.clearEditing();
+    View.clearModalValidationErrors();
+    View.setSaveButtonLoading(false);
+    View.populateStaticSelectOptions();
+    View.setValue("temp_date_received", "");
+    View.setValue("temp_student_name", "");
+    View.setValue("temp_hei", "");
+    View.setValue("temp_date_graduation", "");
+    View.setValue("temp_program", "");
+    View.renderSelectedBatchList();
+    View.updateActionButtons();
+    var modal = document.getElementById("editModal");
+    if (modal) modal.classList.add("show");
+  },
+
+  addManualBatchStudent: function() {
+    View.clearModalValidationErrors();
+    var patch = this.getFormPatch();
+
+    if (!patch.dateReceived) {
+      View.setModalFieldError("temp_date_received", "Date Received is required.");
+      return;
+    }
+    if (!String(patch.studentName).trim()) {
+      View.setModalFieldError("temp_student_name", "Name of the Student is required.");
+      return;
+    }
+    if (!String(patch.hei).trim()) {
+      View.setModalFieldError("temp_hei", "HEI is required.");
+      return;
+    }
+    if (!String(patch.dateGraduation).trim()) {
+      View.setModalFieldError("temp_date_graduation", "Date of Graduation is required.");
+      return;
+    }
+    if (!String(patch.program).trim()) {
+      View.setModalFieldError("temp_program", "Program is required.");
+      return;
+    }
+
+    var entry = Model.createManualBatchEntry(patch);
+    this.refreshDerivedFields(entry);
+    Model.addBatchStudent(entry);
+    View.renderSelectedBatchList();
+    View.updateActionButtons();
+    
+    // Reset name only for next entry
+    View.setValue("temp_student_name", "");
+  },
+
+  selectBatchStudent: function(rowID) {
+    this.syncCurrentFormToModel();
+    var entry = Model.getBatchEntryByRow(rowID);
+    if (entry) {
+      View.populateEditForm(entry);
+      View.renderSelectedBatchList();
+    }
+  },
+
+  removeBatchStudent: function(rowID) {
+    this.syncCurrentFormToModel();
+    Model.removeBatchStudent(rowID);
+    if (!Model.batchStudents.length) {
+      View.closeEditModal();
+      return;
+    }
+    Model.recomputeBatchSoPreviews();
+    Model.batchHasChanges = Model.isBatchDirty();
+    View.populateEditForm(Model.batchStudents[0]);
+    View.renderSelectedBatchList();
+    View.updateActionButtons();
+  },
+
+  saveEdit: function() {
+    View.clearModalValidationErrors();
+    if (!Model.batchStudents.length) {
+      View.showSaveIndicator("No changes to save", "error", 2000);
+      return;
+    }
+    
+    var targets = Model.batchStudents.slice();
+    View.setSaveButtonLoading(true);
+    
+    var payloads = targets.map(function(entry) {
+      return {
+        row: entry._row,
+        dateReceived: entry.fields.dateReceived || "",
+        studentName: entry.fields.studentName || "",
+        hei: entry.fields.hei || "",
+        dateGraduation: entry.fields.dateGraduation || "",
+        program: entry.fields.program || ""
+      };
+    });
+
+    Service.updateTempRecordEntries(payloads, "batch-" + Date.now(), function(batchResult) {
+      View.setSaveButtonLoading(false);
+      var results = batchResult && Array.isArray(batchResult.results) ? batchResult.results : [];
+      var successCount = results.filter(function(r) { return r.ok; }).length;
+      
+      if (successCount === targets.length) {
+        View.showSaveIndicator("Batch saved successfully", "success", 3000);
+        View.closeEditModal();
+        TypingController.initData({ silent: true });
+      } else {
+        View.showSaveIndicator("Saved " + successCount + " of " + targets.length + " students.", "error", 5000);
+      }
+    }, function(err) {
+      View.setSaveButtonLoading(false);
+      View.showSaveIndicator("Batch save failed: " + (err.message || "Unknown error"), "error", 5000);
+    });
+  },
+
+  loadAccountName: function() {
+    Service.getAccountName(function(name) {
+      var el = document.getElementById('accountName');
+      if (el) el.textContent = name || "";
+    });
+  },
+
+  loadNavbarLogo: function() {
+    Service.getNavbarLogoData(function(result) {
+      var dataUrl = result && result.dataUrl ? String(result.dataUrl).trim() : "";
+      var logoImage = document.getElementById("navbarLogoImage");
+      var fallback = document.getElementById("navbarLogoFallback");
+      if (logoImage && dataUrl) {
+        logoImage.src = dataUrl;
+        logoImage.classList.remove("d-none");
+        if (fallback) fallback.classList.add("d-none");
+      }
+    });
+  },
+
+  loadUserRole: function() {
+    Service.getUserRole(function(role) {
+      Model.userRole = role || "Viewer";
+    });
+  },
+
+  startDatabaseRowPolling: function() {
+    setInterval(function() {
+      Service.getDatabaseRowUpdateInfo(function(info) {
+        if (!info || !info.updatedAt) return;
+        if (String(info.updatedAt) === String(Model.lastDatabaseUpdateAt)) return;
+        Model.lastDatabaseUpdateAt = String(info.updatedAt);
+        TypingController.initData({ silent: true });
+      });
+    }, 30000);
+  },
+
+  setActiveHistorySection: function(section) {
+    var nextSection = section === "failure" ? "failure" : "success";
+    Model.activeHistorySection = nextSection;
+    View.setActiveHistorySection(nextSection);
+    if (nextSection === "failure") {
+      this.loadSaveFailureHistory();
+      return;
+    }
+    this.loadHistoryData();
+  },
+
+  loadHistoryData: function(options) {
+    var settings = options || {};
+    Service.getIssuanceHistory(function(rows) {
+      Model.historyRows = Array.isArray(rows) ? rows : [];
+      View.renderHistoryRows(Model.historyRows);
+    });
+  },
+
+  loadSaveFailureHistory: function(options) {
+    Service.getSaveFailureHistory(function(rows) {
+      Model.saveFailureRows = Array.isArray(rows) ? rows : [];
+      View.renderSaveFailureRows(Model.saveFailureRows);
+    });
+  },
+
+  retryFailedSave: function(logRow, localKey) {
+    Service.retryFailedSave(logRow, function(result) {
+      if (result && result.ok) {
+        TypingController.initData({ silent: true });
+        TypingController.loadHistoryData({ silent: true });
+        TypingController.loadSaveFailureHistory({ silent: true });
+      }
+    });
+  },
+
+  initEventListeners: function() {
+    if (Model.listenersBound) return;
+    Model.listenersBound = true;
+
+    this.searchDebounced = this.debounce(function(value) { TypingController.doSearch(value); }, 250);
+
+    var searchInput = document.getElementById("searchInput");
+    if (searchInput) {
+      searchInput.addEventListener("input", function(e){
+        TypingController.searchDebounced(e.target.value);
+      });
+    }
+
+    ["temp_date_received", "temp_student_name", "temp_hei", "temp_date_graduation", "temp_program"].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) {
+        el.addEventListener("change", function() {
+          var fieldKey = TypingController.formFieldMap[id];
+          TypingController.syncCurrentFormToModel(fieldKey);
+        });
+      }
+    });
+  }
+};
+
+var Controller = TypingController;
+document.addEventListener("DOMContentLoaded", function() {
+  TypingController.init();
+});
+</script>

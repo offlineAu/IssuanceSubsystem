@@ -1,0 +1,533 @@
+<script>
+var TypingView = {
+  getEl: function(id) {
+    return document.getElementById(id);
+  },
+
+  render: function() {
+    this.renderModuleState();
+  },
+
+  renderModuleState: function() {
+    var titleEl = document.getElementById("appNavbarTitle");
+    if (titleEl) {
+      titleEl.textContent = "Typing Records System";
+    }
+  },
+
+  getTableRenderContext: function() {
+    return {
+      headerRowId: "typingSearchTableHeaderRow",
+      resultsId: "typingSearchResults",
+      mobileId: "typingSearchResultsMobile",
+      statusId: "typingStatusText",
+      paginationId: "typingPagination",
+      pageInputId: "typingPageJumpInput",
+      pageMetaId: "typingPageMeta",
+      overlayId: "typingLoadingOverlay"
+    };
+  },
+
+  setActiveMainView: function(viewName) {
+    var home = document.getElementById("homeView");
+    var history = document.getElementById("historyView");
+    var homeBtn = document.getElementById("navHomeBtn");
+    var historyBtn = document.getElementById("navHistoryBtn");
+    var isHistory = viewName === "history";
+
+    if (home) home.classList.toggle("d-none", isHistory);
+    if (history) history.classList.toggle("d-none", !isHistory);
+    if (homeBtn) {
+      homeBtn.classList.toggle("is-active", !isHistory);
+      homeBtn.setAttribute("aria-pressed", String(!isHistory));
+    }
+    if (historyBtn) {
+      historyBtn.classList.toggle("is-active", isHistory);
+      historyBtn.setAttribute("aria-pressed", String(isHistory));
+    }
+  },
+
+  setActiveHistorySection: function(section) {
+    var success = document.getElementById("historySuccessSection");
+    var failure = document.getElementById("historyFailureSection");
+    var successBtn = document.getElementById("historySuccessTab");
+    var failureBtn = document.getElementById("historyFailureTab");
+    var isFailure = section === "failure";
+
+    if (success) success.classList.toggle("d-none", isFailure);
+    if (failure) failure.classList.toggle("d-none", !isFailure);
+    if (successBtn) {
+      successBtn.classList.toggle("is-active", !isFailure);
+      successBtn.setAttribute("aria-pressed", String(!isFailure));
+    }
+    if (failureBtn) {
+      failureBtn.classList.toggle("is-active", isFailure);
+      failureBtn.setAttribute("aria-pressed", String(isFailure));
+    }
+  },
+
+  formatReportCount: function(value) {
+    return Number(value || 0).toLocaleString();
+  },
+
+  buildReportBarRows: function(items, options) {
+    options = options || {};
+    var emptyMessage = options.emptyMessage || "No data available";
+    var accentClass = options.accentClass || "";
+    if (!items || !items.length) {
+      return "<div class='report-empty-state'>" + emptyMessage + "</div>";
+    }
+    var max = items.reduce(function(best, item) {
+      return Math.max(best, Number(item.value || 0));
+    }, 0) || 1;
+    return items.map(function(item) {
+      var width = Math.max(8, Math.round((Number(item.value || 0) / max) * 100));
+      return "<div class='report-bar-row'>" +
+        "<div class='report-bar-text'>" +
+          "<span class='report-bar-label'>" + (item.label || "-") + "</span>" +
+          "<strong class='report-bar-value'>" + View.formatReportCount(item.value) + "</strong>" +
+        "</div>" +
+        "<div class='report-bar-track'>" +
+          "<span class='report-bar-fill " + accentClass + "' style='width:" + width + "%'></span>" +
+        "</div>" +
+      "</div>";
+    }).join("");
+  },
+
+  renderReportAnalytics: function() {
+    return;
+  },
+
+  setValue: function(id, value) {
+    var el = this.getEl(id);
+    if (!el) return;
+    var safeValue = value || "";
+    if (el.tagName === "SELECT" && safeValue && !Array.prototype.some.call(el.options || [], function(option) { return option.value === safeValue; })) {
+      var extraOption = document.createElement("option");
+      extraOption.value = safeValue;
+      extraOption.textContent = safeValue;
+      el.appendChild(extraOption);
+    }
+    el.value = safeValue;
+  },
+
+  populateDatalistOptions: function(id, options) {
+    var el = this.getEl(id);
+    if (!el) return;
+    el.innerHTML = (options || []).map(function(option) {
+      return "<option value='" + View.escapeHtml(option) + "'></option>";
+    }).join("");
+  },
+
+  populateStaticSelectOptions: function() {
+    var staticOptions = Model.staticOptions || {};
+    this.populateDatalistOptions("temp_hei_list", staticOptions.heiOptions || []);
+    this.populateDatalistOptions("temp_program_list", staticOptions.programOptions || []);
+  },
+
+  getRecordViewConfig: function() {
+    return Model.recordViewConfig || {};
+  },
+
+  isDeveloperView: function() {
+    return this.getRecordViewConfig().mode === "developer";
+  },
+
+  applyRecordViewConfig: function() {
+    var config = this.getRecordViewConfig();
+    var headerRow = this.getEl("searchTableHeaderRow");
+    var filterBuilderMain = this.getEl("filterBuilderMain");
+    var navReportBtn = this.getEl("navReportBtn");
+    var navHistoryBtn = this.getEl("navHistoryBtn");
+    var reportView = this.getEl("reportView");
+    var historyView = this.getEl("historyView");
+    var homeView = this.getEl("homeView");
+
+    if (headerRow) {
+      var tableColumns = Array.isArray(config.tableColumns) ? config.tableColumns : [];
+      headerRow.innerHTML = tableColumns.map(function(column) {
+        return "<th>" + View.escapeHtml(column.label || column.name || "") + "</th>";
+      }).join("");
+    }
+
+    if (filterBuilderMain) filterBuilderMain.classList.add("d-none");
+    if (navReportBtn) navReportBtn.classList.add("d-none");
+    if (reportView) reportView.classList.add("d-none");
+    if (historyView) historyView.classList.toggle("d-none", Model.activeMainView !== "history");
+    if (homeView) homeView.classList.toggle("d-none", Model.activeMainView === "history");
+  },
+
+  escapeHtml: function(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  },
+
+  renderPagination: function() {
+    var container = this.getEl("pagination");
+    if (!container) return;
+    container.innerHTML = "";
+
+    var totalPages = Math.ceil(Model.filteredData.length / Model.rowsPerPage);
+    var current = Model.currentPage;
+    var safeTotal = Math.max(1, totalPages);
+    if (current > safeTotal) current = safeTotal;
+    if (current < 1) current = 1;
+
+    var pageInput = this.getEl("pageJumpInput");
+    if (pageInput) {
+      pageInput.max = String(safeTotal);
+      pageInput.value = String(current);
+    }
+    var pageMeta = this.getEl("pageMeta");
+    if (pageMeta) {
+      pageMeta.textContent = "Page " + current + " of " + safeTotal;
+    }
+
+    if (totalPages <= 1) return;
+
+    var maxVisible = 5;
+    var start = Math.max(1, current - Math.floor(maxVisible / 2));
+    var end = Math.min(totalPages, start + maxVisible - 1);
+    if (end - start < maxVisible - 1) start = Math.max(1, end - maxVisible + 1);
+
+    if (current > 1) container.innerHTML += "<button onclick='Controller.renderPage(" + (current - 1) + ")'>&laquo; Prev</button>";
+    if (start > 1) container.innerHTML += "<button onclick='Controller.renderPage(1)'>1</button>" + (start > 2 ? "<span>...</span>" : "");
+
+    for (var i = start; i <= end; i++) {
+      container.innerHTML += "<button onclick='Controller.renderPage(" + i + ")' class='" + (i === current ? "active-page" : "") + "'>" + i + "</button>";
+    }
+
+    if (end < totalPages) container.innerHTML += (end < totalPages - 1 ? "<span>...</span>" : "") + "<button onclick='Controller.renderPage(" + totalPages + ")'>" + totalPages + "</button>";
+    if (current < totalPages) container.innerHTML += "<button onclick='Controller.renderPage(" + (current + 1) + ")'>Next &raquo;</button>";
+  },
+
+  updateStatusText: function() {
+    var status = this.getEl("statusText");
+    if (!status) return;
+    var visibleCount = Model.filteredData.length;
+    if (!visibleCount) {
+      status.innerText = Model.searchMode
+        ? "Showing 0 of 0 matching rows"
+        : "Showing 0 of 0 loaded rows";
+      return;
+    }
+    var start = (Model.currentPage - 1) * Model.rowsPerPage + 1;
+    var end = Math.min(start + Model.rowsPerPage - 1, visibleCount);
+    status.innerText = Model.searchMode
+      ? "Showing " + start + "-" + end + " of " + visibleCount + " matching rows"
+      : "Showing " + start + "-" + end + " of " + Model.fullData.length + " loaded rows";
+  },
+
+  showOverlay: function(show) {
+    var el = this.getEl("loadingOverlay");
+    if (el) el.classList.toggle("show", show);
+  },
+
+  showMainSearchLoading: function() {
+    var tbody = this.getEl("searchResults");
+    var mobileContainer = this.getEl("searchResultsMobile");
+    if (!tbody) return;
+    tbody.innerHTML = "<tr><td colspan='8' class='text-center py-4'>" +
+      "<span class='inline-table-loader'><span class='spinner-border spinner-border-sm' role='status'></span><span>Searching...</span></span>" +
+      "</td></tr>";
+    if (mobileContainer) {
+      mobileContainer.innerHTML = "<div class='search-results-empty'><span class='inline-table-loader'><span class='spinner-border spinner-border-sm' role='status'></span><span>Searching...</span></span></div>";
+    }
+  },
+
+  showSaveIndicator: function(message, type, autoHideMs) {
+    var el = this.getEl("saveIndicator");
+    if (!el) return;
+    el.classList.remove("success", "error", "show");
+    if (type === "success") el.classList.add("success");
+    if (type === "error") el.classList.add("error");
+    el.textContent = message || "";
+    el.classList.add("show");
+
+    if (autoHideMs && autoHideMs > 0) {
+      setTimeout(function() { el.classList.remove("show"); }, autoHideMs);
+    }
+  },
+
+  setSaveButtonLoading: function(isLoading) {
+    var btn = this.getEl("savebtn");
+    if (!btn) return;
+    if (!btn.dataset.defaultHtml) btn.dataset.defaultHtml = btn.innerHTML;
+    if (isLoading) {
+      btn.disabled = true;
+      btn.innerHTML = "<span class='spinner-border spinner-border-sm me-2' role='status' aria-hidden='true'></span>Saving...";
+      return;
+    }
+    btn.innerHTML = btn.dataset.defaultHtml || "<i class='bi bi-save'></i> Save";
+  },
+
+  renderPage: function(page) {
+    if (Model.isSearchingMain) {
+      this.showMainSearchLoading();
+      return;
+    }
+    var start = (page - 1) * Model.rowsPerPage;
+    var end = start + Model.rowsPerPage;
+    var rows = Model.filteredData.slice(start, end);
+    var tbody = this.getEl("searchResults");
+    var mobileContainer = this.getEl("searchResultsMobile");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    if (mobileContainer) mobileContainer.innerHTML = "";
+
+    if (!rows.length) {
+      this.renderEmpty("No records found");
+      return;
+    }
+
+    var cell = function(value) {
+      return "<div class='cell-wrap'>" + (value || "") + "</div>";
+    };
+
+    var config = this.getRecordViewConfig();
+    var tableColumns = Array.isArray(config.tableColumns) ? config.tableColumns : [];
+
+    rows.forEach(function(r) {
+      var tr = document.createElement("tr");
+      tr.dataset.row = r._row;
+      tr.innerHTML = tableColumns.map(function(column) {
+        return "<td>" + cell(View.escapeHtml(r[column.name] || "")) + "</td>";
+      }).join("");
+      tr.classList.add("show");
+      tbody.appendChild(tr);
+
+      if (mobileContainer) {
+        var extraColumns = tableColumns.filter(function(column) { return !column.isIdentity; }).slice(0, 6);
+        var card = document.createElement("button");
+        card.type = "button";
+        card.className = "search-result-card";
+        card.dataset.row = r._row;
+        card.innerHTML =
+          "<div class='search-result-card-top'>" +
+            "<div class='search-result-name'>" + View.escapeHtml(r["Name of the Student"] || "") + "</div>" +
+            "<div class='search-result-id'>" + View.escapeHtml(r["Program"] || "-") + "</div>" +
+          "</div>" +
+          "<div class='search-result-hey'>" + View.escapeHtml(r.HEI || "-") + "</div>" +
+          "<div class='search-result-meta-grid'>" +
+            extraColumns.map(function(column) {
+              return "<div><span>" + View.escapeHtml(column.label || column.name || "") + "</span><strong>" + View.escapeHtml(r[column.name] || "-") + "</strong></div>";
+            }).join("") +
+          "</div>";
+        mobileContainer.appendChild(card);
+      }
+    });
+
+    this.renderPagination();
+    this.updateStatusText();
+    this.renderReportAnalytics();
+  },
+
+  renderEmpty: function(message) {
+    var tbody = this.getEl("searchResults");
+    var mobileContainer = this.getEl("searchResultsMobile");
+    if (!tbody) return;
+    var config = this.getRecordViewConfig();
+    var colspan = Math.max(1, Array.isArray(config.tableColumns) ? config.tableColumns.length : 8);
+    tbody.innerHTML = "<tr><td colspan='" + colspan + "' class='text-center py-4'>" + message + "</td></tr>";
+    if (mobileContainer) {
+      mobileContainer.innerHTML = "<div class='search-results-empty'>" + message + "</div>";
+    }
+    this.renderReportAnalytics();
+  },
+
+  clearModalFieldError: function(fieldId, partnerId) {
+    var input = this.getEl(fieldId);
+    if (input) input.classList.remove("field-invalid");
+    var msg = this.getEl("error_" + fieldId);
+    if (msg) msg.textContent = "";
+    if (partnerId) {
+      var partner = this.getEl(partnerId);
+      if (partner) partner.classList.remove("field-invalid");
+    }
+  },
+
+  setModalFieldError: function(fieldId, message, partnerId) {
+    var input = this.getEl(fieldId);
+    if (input) input.classList.add("field-invalid");
+    var msg = this.getEl("error_" + fieldId);
+    if (msg) msg.textContent = message || "";
+    if (partnerId) {
+      var partner = this.getEl(partnerId);
+      if (partner) partner.classList.add("field-invalid");
+    }
+  },
+
+  clearModalActionError: function(actionId) {
+    var map = {
+      savebtn: "saveActionError",
+      updateStudentBtn: "updateActionError"
+    };
+    var el = this.getEl(map[actionId] || actionId);
+    if (el) el.textContent = "";
+  },
+
+  setModalActionError: function(actionId, message) {
+    var map = {
+      savebtn: "saveActionError",
+      updateStudentBtn: "updateActionError"
+    };
+    var el = this.getEl(map[actionId] || actionId);
+    if (el) el.textContent = message || "";
+  },
+
+  clearModalValidationErrors: function() {
+    [
+      "temp_date_received",
+      "temp_student_name",
+      "temp_hei",
+      "temp_date_graduation",
+      "temp_program"
+    ].forEach(function(id) {
+      View.clearModalFieldError(id);
+    });
+    this.clearModalActionError("savebtn");
+    this.clearModalActionError("updateStudentBtn");
+  },
+
+  renderHistoryRows: function(rows) {
+    var tbody = this.getEl("historyResults");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    if (!rows || !rows.length) {
+      tbody.innerHTML = "<tr><td colspan='9' class='text-center text-muted py-3'>No history found</td></tr>";
+      return;
+    }
+    rows.forEach(function(r) {
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + View.escapeHtml(r.name || "-") + "</td>" +
+        "<td>" + View.escapeHtml(r.dateReceived || "-") + "</td>" +
+        "<td>" + View.escapeHtml(r.hei || "-") + "</td>" +
+        "<td>" + View.escapeHtml(r.dateGraduation || "-") + "</td>" +
+        "<td>" + View.escapeHtml(r.program || "-") + "</td>" +
+        "<td>" + View.escapeHtml(r.row || "-") + "</td>" +
+        "<td><code>" + View.escapeHtml(r.code || "-") + "</code></td>" +
+        "<td><code>" + View.escapeHtml(r.debugId || "-") + "</code></td>" +
+        "<td>" + View.escapeHtml(r.dateSaved || "-") + "</td>";
+      tbody.appendChild(tr);
+    });
+  },
+
+  renderSaveFailureRows: function(rows) {
+    var tbody = this.getEl("historyFailureResults");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    if (!rows || !rows.length) {
+      tbody.innerHTML = "<tr><td colspan='9' class='text-center text-muted py-3'>No failed saves found</td></tr>";
+      return;
+    }
+    rows.forEach(function(r) {
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + View.escapeHtml(r.name || "-") + "</td>" +
+        "<td>" + View.escapeHtml(r.row || "-") + "</td>" +
+        "<td><div class='history-failure-message'>" + View.escapeHtml(r.message || "-") + "</div></td>" +
+        "<td><code>" + View.escapeHtml(r.code || "-") + "</code></td>" +
+        "<td><code>" + View.escapeHtml(r.debugId || "-") + "</code></td>" +
+        "<td><span class='history-failure-status status-" + String(r.status || "failed").replace(/[^a-z-]/gi, "").toLowerCase() + "'>" + View.escapeHtml(r.status || "failed") + "</span></td>" +
+        "<td>" + View.escapeHtml(r.retryResult || "-") + (r.retryDebugId ? "<div class='small text-muted'><code>" + View.escapeHtml(r.retryDebugId) + "</code></div>" : "") + "</td>" +
+        "<td>" + View.escapeHtml(r.dateSaved || "-") + "</td>" +
+        "<td>" + (
+          r.status === "retried-success"
+            ? "<span class='text-success small fw-semibold'>Resolved</span>"
+            : "<button type='button' class='btn btn-sm btn-outline-primary retry-failure-btn' data-log-row='" + View.escapeHtml(r.logRow || "") + "' data-local-key='" + View.escapeHtml(r.localKey || "") + "' onclick=\"Controller.retryFailedSave('" + View.escapeHtml(r.logRow || "") + "','" + View.escapeHtml(r.localKey || "") + "')\">Retry Save</button>"
+        ) + "</td>";
+      tbody.appendChild(tr);
+    });
+  },
+
+  renderSelectedBatchList: function() {
+    var container = this.getEl("selectedBatchList");
+    if (!container) return;
+    container.innerHTML = "";
+
+    if (!Model.batchStudents.length) {
+      container.innerHTML = "<div class='selected-batch-empty text-muted small'>No students added yet</div>";
+      return;
+    }
+
+    Model.batchStudents.forEach(function(entry) {
+      var active = String(entry._row) === String(Model.editingRowID) ? " active" : "";
+
+      var item = document.createElement("div");
+      item.className = "selected-student-item border rounded" + active;
+      item.setAttribute("data-row", entry._row);
+      item.innerHTML =
+        "<div class='selected-student-card-header'>" +
+          "<div>" +
+            "<div class='selected-student-card-title'>" + View.escapeHtml(entry.fields.studentName || ("Student " + String(Model.batchStudents.indexOf(entry) + 1))) + "</div>" +
+            "<div class='selected-student-card-subtitle'>HEI: " + View.escapeHtml(entry.fields.hei || "-") + "</div>" +
+          "</div>" +
+          "<div class='selected-student-card-actions'>" +
+            "<button type='button' class='btn btn-sm btn-outline-primary selected-student-edit-btn' title='Edit this batch entry'><i class='bi bi-pencil-square'></i> Edit</button>" +
+            "<button type='button' class='btn btn-sm btn-outline-danger selected-student-remove-btn' title='Remove from batch'><i class='bi bi-trash'></i></button>" +
+          "</div>" +
+        "</div>" +
+        "<div class='selected-student-fields read-only'>" +
+          "<div class='selected-student-field'><span>Date Received</span><strong>" + View.escapeHtml(entry.fields.dateReceived || "-") + "</strong></div>" +
+          "<div class='selected-student-field'><span>Program</span><strong>" + View.escapeHtml(entry.fields.program || "-") + "</strong></div>" +
+          "<div class='selected-student-field selected-student-field-full'><span>Date of Graduation</span><strong>" + View.escapeHtml(entry.fields.dateGraduation || "-") + "</strong></div>" +
+        "</div>";
+
+      var editBtn = item.querySelector(".selected-student-edit-btn");
+      if (editBtn) {
+        editBtn.onclick = function(e) {
+          e.stopPropagation();
+          Controller.selectBatchStudent(entry._row);
+        };
+      }
+      var removeBtn = item.querySelector(".selected-student-remove-btn");
+      if (removeBtn) {
+        removeBtn.onclick = function(e) {
+          e.stopPropagation();
+          Controller.removeBatchStudent(entry._row);
+        };
+      }
+      container.appendChild(item);
+    });
+  },
+
+  updateActionButtons: function() {
+    var saveBtn = this.getEl("savebtn");
+    var canEditRecord = true; 
+    if (saveBtn) {
+      saveBtn.disabled = !Model.batchStudents.length;
+    }
+  },
+
+  populateEditForm: function(entry) {
+    if (!entry) return;
+    Model.setEditingRow(entry._row);
+    this.clearModalValidationErrors();
+    var summary = this.getEl("studentSummary");
+    if (summary) {
+      summary.innerHTML = "<b>" + (entry.name || "") + "</b><br>" +
+                          "ID: " + (entry.ID || "") + "<br>" +
+                          "HEI: " + (entry.HEI || "");
+    }
+
+    this.setValue("temp_date_received", entry.fields.dateReceived);
+    this.setValue("temp_student_name", entry.fields.studentName);
+    this.setValue("temp_hei", entry.fields.hei);
+    this.setValue("temp_date_graduation", entry.fields.dateGraduation);
+    this.setValue("temp_program", entry.fields.program);
+  },
+
+  closeEditModal: function() {
+    var modal = this.getEl("editModal");
+    if (modal) modal.classList.remove("show");
+    Model.clearEditing();
+  }
+};
+
+var View = TypingView;
+</script>

@@ -2,7 +2,7 @@
 var Service = {
   buildContext: function(module, source) {
     var context = {
-      module: String(module || Model.activeModule || "issuance"),
+      module: String(module || "issuance"),
       requestId: Number((Model.executionLock && Model.executionLock.requestId) || 0),
       source: String(source || "ui"),
       timestamp: new Date().toISOString()
@@ -58,7 +58,7 @@ var Service = {
   },
 
   getInitialData: function(batchSize, onSuccess) {
-    var context = this.buildContext(Model.activeModule || "issuance", "ui");
+    var context = this.buildContext("issuance", "ui");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess({ data: [], total: 0, viewConfig: Model.recordViewConfig || {} });
       return;
@@ -69,7 +69,7 @@ var Service = {
   },
 
   loadRemainingData: function(startRow, batchSize, onSuccess) {
-    var context = this.buildContext(Model.activeModule || "issuance", "internal");
+    var context = this.buildContext("issuance", "internal");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess({ data: [] });
       return;
@@ -80,7 +80,7 @@ var Service = {
   },
 
   searchExactName: function(term, onSuccess) {
-    var context = this.buildContext(Model.activeModule || "issuance", "ui");
+    var context = this.buildContext("issuance", "ui");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess([]);
       return;
@@ -91,7 +91,7 @@ var Service = {
   },
 
   getSavedSoPrefixes: function(onSuccess) {
-    var context = this.buildContext(Model.activeModule || "issuance", "internal");
+    var context = this.buildContext("issuance", "internal");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess([]);
       return;
@@ -102,7 +102,7 @@ var Service = {
   },
 
   saveSoPrefix: function(prefix, onSuccess) {
-    var context = this.buildContext(Model.activeModule || "issuance", "internal");
+    var context = this.buildContext("issuance", "internal");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess([]);
       return;
@@ -113,7 +113,7 @@ var Service = {
   },
 
   updateIssuanceColumns: function(payload, onSuccess, onFailure) {
-    var context = this.buildContext(Model.activeModule || "issuance", "ui");
+    var context = this.buildContext("issuance", "ui");
     if (!this.assertModuleContext(context.module)) {
       console.log("[SERVICE BLOCKED] module mismatch");
       if (onSuccess) onSuccess({ ok: false, message: "Service call blocked by module context." });
@@ -126,7 +126,7 @@ var Service = {
   },
 
   getIssuanceHistory: function(studentId, studentName, onSuccess, onFailure) {
-    var context = this.buildContext(Model.activeModule || "issuance", "internal");
+    var context = this.buildContext("issuance", "internal");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess([]);
       return;
@@ -137,7 +137,7 @@ var Service = {
   },
 
   getSaveFailureHistory: function(onSuccess, onFailure) {
-    var context = this.buildContext(Model.activeModule || "issuance", "retry");
+    var context = this.buildContext("issuance", "retry");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess([]);
       return;
@@ -148,7 +148,7 @@ var Service = {
   },
 
   retryFailedSave: function(logRow, onSuccess, onFailure) {
-    var context = this.buildContext(Model.activeModule || "issuance", "retry");
+    var context = this.buildContext("issuance", "retry");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess({ ok: false, message: "Service call blocked by module context." });
       return;
@@ -159,7 +159,7 @@ var Service = {
   },
 
   logClientSaveFailure: function(payload, message, onSuccess, onFailure) {
-    var context = this.buildContext(Model.activeModule || "issuance", "retry");
+    var context = this.buildContext("issuance", "retry");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess({ ok: false, message: "Service call blocked by module context." });
       return;
@@ -198,53 +198,6 @@ var Service = {
     });
   },
 
-  createTypingBatch: function(payload) {
-    var context = this.buildContext(Model.activeModule || "typing", "ui");
-    if (!this.assertModuleContext(context.module)) {
-      return Promise.resolve({ handled: true, status: "FAILED", data: { inserted: 0, skippedDuplicates: 0, failed: 0 } });
-    }
-    return new Promise(function(resolve, reject) {
-      google.script.run
-        .withSuccessHandler(Service.wrapSuccess(context, resolve, { handled: true, status: "FAILED", data: { inserted: 0, skippedDuplicates: 0, failed: 0 } }))
-        .withFailureHandler(Service.wrapFailure(context, reject))
-        .routeModule("typing", "createBatch", Service.attachPayloadContext(payload, context));
-    });
-  },
-
-  getDashboardData: function(filters) {
-    var context = this.buildContext(Model.activeModule || "dashboard", "ui");
-    if (!this.assertModuleContext(context.module)) {
-      return Promise.resolve(null);
-    }
-    return new Promise(function(resolve, reject) {
-      google.script.run
-        .withSuccessHandler(Service.wrapSuccess(context, function(result) {
-          if (result && result.handled === false && result.status === "NOT_IMPLEMENTED") {
-            google.script.run
-              .withSuccessHandler(Service.wrapSuccess(context, resolve, null))
-              .withFailureHandler(Service.wrapFailure(context, reject))
-              .getDashboardData(Service.attachPayloadContext(filters || {}, context));
-            return;
-          }
-          if (result && result.handled === true) {
-            resolve(result.data);
-            return;
-          }
-          google.script.run
-            .withSuccessHandler(Service.wrapSuccess(context, resolve, null))
-            .withFailureHandler(Service.wrapFailure(context, reject))
-            .getDashboardData(Service.attachPayloadContext(filters || {}, context));
-        }, null))
-        .withFailureHandler(Service.wrapFailure(context, function() {
-          google.script.run
-            .withSuccessHandler(Service.wrapSuccess(context, resolve, null))
-            .withFailureHandler(Service.wrapFailure(context, reject))
-            .getDashboardData(Service.attachPayloadContext(filters || {}, context));
-        }))
-        .routeModule("dashboard", "fetch", Service.attachPayloadContext(filters || {}, context));
-    });
-  },
-
   getNavbarLogoData: function(onSuccess, onFailure) {
     var runner = google.script.run.withSuccessHandler(onSuccess || function(){});
     if (onFailure) runner = runner.withFailureHandler(onFailure);
@@ -252,7 +205,7 @@ var Service = {
   },
 
   getDatabaseRowUpdateInfo: function(onSuccess) {
-    var context = this.buildContext(Model.activeModule || "issuance", "polling");
+    var context = this.buildContext("issuance", "polling");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess(null);
       return;
@@ -263,7 +216,7 @@ var Service = {
   },
 
   getDatabaseRow: function(rowNumber, onSuccess, onFailure) {
-    var context = this.buildContext(Model.activeModule || "issuance", "polling");
+    var context = this.buildContext("issuance", "polling");
     if (!this.assertModuleContext(context.module)) {
       if (onSuccess) onSuccess(null);
       return;

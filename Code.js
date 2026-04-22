@@ -14,6 +14,28 @@ const userAccessSheetName = "User Access";
 const dataTypesSheetName = "Data Types";
 const navbarLogoFileId = "1BZo5fBsJ7zYW69ieDIZW1_-E3Xmqc2zn";
 
+// ========== Executive Dashboard Constants ==========
+const DASHBOARD_SPREADSHEET_ID = spreadsheetID;
+const DASHBOARD_STATIC_SHEET = "Static";
+const DASHBOARD_USERS_SHEET = usersSheetName;
+const DASHBOARD_DATA_TYPES_SHEET = dataTypesSheetName;
+const DASHBOARD_REFERENCE_CACHE_TTL_SECONDS = 1800; // 30 minutes
+const DASHBOARD_SECTION_CACHE_TTL_SECONDS = 600; // 10 minutes
+const BIGQUERY_CACHE_VERSION = "v2";
+const DASHBOARD_DEBUG = false;
+
+const DASHBOARD_STATUS_ORDER = [
+  "For Evaluation",
+  "Evaluated",
+  "Deficiency",
+  "Approved",
+  "Verified",
+  "For Signature",
+  "For Release",
+  "Released",
+  "Cancelled"
+];
+
 const columnsToShow = [
   "ID",
   "Name of the Student",
@@ -1364,11 +1386,39 @@ function appendIssuanceHistory_(history) {
   historySheet.appendRow(row);
 }
 
+function include(filename) {
+  try {
+    return HtmlService.createHtmlOutputFromFile(filename).getContent();
+  } catch (e) {
+    console.error("Include failed for " + filename + ": " + e.toString());
+    return "<!-- Include error: " + filename + " -->";
+  }
+}
+
 function doGet() {
-  return HtmlService.createTemplateFromFile('Index')
+  const email = getEditorEmail_();
+  const userContext = resolveUserContext_(email);
+  const position = userContext ? String(userContext.position || "").trim().toLowerCase() : "";
+  
+  let templateName = "Index"; // Default for Verifier/Developer
+  let title = "Document Issuance Subsystem";
+
+  if (position === "es ii") {
+    templateName = "DashboardIndex";
+    title = "Executive Dashboard";
+  } else if (position === "releasing/verifier" || position === "verifier") {
+    // Both Releasing/Verifier and Verifier (if distinct from base Issuance Verifier) might need Typing
+    // The prompt says: Releasing/Verifier -> TypingIndex, Verifier -> IssuanceIndex
+    if (position === "releasing/verifier") {
+      templateName = "TypingIndex";
+      title = "Typing Records";
+    }
+  }
+
+  return HtmlService.createTemplateFromFile(templateName)
     .evaluate()
-    .setTitle('Document Issuance Subsystem')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+    .setTitle(title)
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function legacy_getInitialData_(batchSize) {
@@ -2219,6 +2269,176 @@ function getDashboardData(filters) {
   return legacy_getDashboardData_(filters || {});
 }
 
+// ========== Executive Dashboard Migration: Core Utilities ==========
+
+function toTrimmedString_(value) {
+  return value == null ? "" : String(value).trim();
+}
+
+function buildSql_(lines) {
+  return lines.filter(function(line) { return line != null && String(line).trim() !== ""; }).join("\n");
+}
+
+function formatDateInputValue_(date) {
+  if (!date || isNaN(date.getTime())) return "";
+  var year = date.getFullYear();
+  var month = date.getMonth() + 1;
+  var day = date.getDate();
+  var monthStr = month < 10 ? "0" + month : String(month);
+  var dayStr = day < 10 ? "0" + day : String(day);
+  return year + "-" + monthStr + "-" + dayStr;
+}
+
+function offsetDateValue_(baseDate, offsetDays) {
+  if (!baseDate || isNaN(baseDate.getTime())) return "";
+  var result = new Date(baseDate);
+  result.setDate(result.getDate() + offsetDays);
+  return formatDateInputValue_(result);
+}
+
+function createDiagnostics_(label) {
+  return {
+    requestId: String(label || "") + "-" + new Date().getTime() + "-" + Math.floor(Math.random() * 100000),
+    startedAt: new Date().getTime(),
+    timings: {},
+    cacheStatus: "bypass",
+    warnings: []
+  };
+}
+
+function startTiming_(diagnostics, name, meta) {
+  diagnostics.timings[name] = {
+    startedAt: new Date().getTime(),
+    meta: meta || {}
+  };
+}
+
+function endTiming_(diagnostics, name, meta) {
+  var timing = diagnostics.timings[name];
+  if (timing) {
+    timing.endedAt = new Date().getTime();
+    timing.durationMs = timing.endedAt - timing.startedAt;
+    if (meta) {
+      timing.meta = timing.meta || {};
+      Object.keys(meta).forEach(function(key) {
+        timing.meta[key] = meta[key];
+      });
+    }
+  }
+}
+
+function finalizeDiagnostics_(diagnostics, status, meta) {
+  diagnostics.status = status;
+  diagnostics.endedAt = new Date().getTime();
+  diagnostics.durationMs = diagnostics.endedAt - diagnostics.startedAt;
+  if (meta) {
+    diagnostics.meta = diagnostics.meta || {};
+    Object.keys(meta).forEach(function(key) {
+      diagnostics.meta[key] = meta[key];
+    });
+  }
+}
+
+// ========== Executive Dashboard Migration: Filter Normalization ==========
+
+function normalizeDashboardStatus_(value) {
+  var raw = toTrimmedString_(value).toLowerCase();
+  if (!raw) return "";
+  if (raw.indexOf("for evaluation") !== -1) return "For Evaluation";
+  if (raw.indexOf("evaluated") !== -1 || raw.indexOf("for verification") !== -1) return "Evaluated";
+  if (raw.indexOf("deficien") !== -1) return "Deficiency";
+  if (raw.indexOf("verified") !== -1) return "Verified";
+  if (raw.indexOf("for signature") !== -1 || raw.indexOf("for signing") !== -1 || raw === "signature") return "For Signature";
+  if (raw.indexOf("for release") !== -1 || raw.indexOf("ready for release") !== -1 || raw.indexOf("pending release") !== -1 || raw.indexOf("releasing") !== -1) return "For Release";
+  if (raw.indexOf("released") !== -1 || raw.indexOf("release complete") !== -1 || raw.indexOf("completed") !== -1) return "Released";
+  if (raw.indexOf("approved") !== -1 || raw.indexOf("approeved") !== -1 || raw.indexOf("arpproved") !== -1) return "Approved";
+  if (raw.indexOf("cancel") !== -1) return "Cancelled";
+  return "";
+}
+
+function normalizeFilterValue_(value) {
+  var trimmed = toTrimmedString_(value);
+  if (!trimmed || trimmed.toUpperCase() === "ALL") return "";
+  return trimmed;
+}
+
+function normalizeDatePresetValue_(value) {
+  var preset = toTrimmedString_(value) || "allTime";
+  var validPresets = ["allTime", "thisYear", "yearToDate", "last30Days", "last90Days", "specificDate"];
+  if (validPresets.indexOf(preset) !== -1) return preset;
+  return "allTime";
+}
+
+function normalizeDateValue_(value) {
+  var trimmed = toTrimmedString_(value);
+  if (!trimmed || !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return "";
+  return trimmed;
+}
+
+function resolveDashboardDatePresetRange_(datePreset, dateFrom, dateTo) {
+  var anchorDateValue = getDashboardPresetAnchorDate_();
+  var anchorDate = anchorDateValue ? new Date(anchorDateValue + "T00:00:00") : new Date();
+  var effectiveDate = isNaN(anchorDate.getTime()) ? new Date() : anchorDate;
+  var currentYear = effectiveDate.getFullYear();
+  var todayValue = formatDateInputValue_(effectiveDate);
+  
+  // For last30Days and last90Days, use CURRENT DATE (not anchor date)
+  var now = new Date();
+  var currentDateValue = formatDateInputValue_(now);
+
+  if (datePreset === "allTime") {
+    return { dateFrom: "", dateTo: "" };
+  }
+  if (datePreset === "thisYear") {
+    return {
+      dateFrom: currentYear + "-01-01",
+      dateTo: todayValue
+    };
+  }
+  if (datePreset === "yearToDate") {
+    var fiscalYearStart = new Date(Date.UTC(currentYear, 0, 1));
+    return {
+      dateFrom: formatDateInputValue_(fiscalYearStart),
+      dateTo: todayValue
+    };
+  }
+  if (datePreset === "last30Days") {
+    // Use current date, not anchor date
+    return {
+      dateFrom: offsetDateValue_(now, -29),
+      dateTo: currentDateValue
+    };
+  }
+  if (datePreset === "last90Days") {
+    // Use current date, not anchor date
+    return {
+      dateFrom: offsetDateValue_(now, -89),
+      dateTo: currentDateValue
+    };
+  }
+
+  return { dateFrom: "", dateTo: "" };
+}
+
+function normalizeFilters_(filters) {
+  var datePreset = normalizeDatePresetValue_(filters && filters.datePreset);
+  var resolvedDateRange = resolveDashboardDatePresetRange_(
+    datePreset,
+    normalizeDateValue_(filters && filters.dateFrom),
+    normalizeDateValue_(filters && filters.dateTo)
+  );
+  return {
+    program: normalizeFilterValue_(filters && filters.program),
+    es2InCharge: normalizeFilterValue_(filters && filters.es2InCharge),
+    datePreset: datePreset,
+    dateFrom: resolvedDateRange.dateFrom,
+    dateTo: resolvedDateRange.dateTo,
+    applicationStatus: normalizeFilterValue_(filters && filters.applicationStatus),
+    transactionType: normalizeFilterValue_(filters && filters.transactionType),
+    hei: normalizeFilterValue_(filters && filters.hei)
+  };
+}
+
 function runBigQueryQuery_(query, queryParameters) {
   if (typeof BigQuery === "undefined" || !BigQuery || !BigQuery.Jobs) {
     throw new Error("BigQuery advanced service is not enabled in this Apps Script project.");
@@ -2250,56 +2470,162 @@ function mapBigQueryRows_(rows, mapper) {
 }
 
 function runDashboardBigQueryOverSources_(queryFactory) {
-  var sources = [BIGQUERY_NATIVE_REPORTING_VIEW, BIGQUERY_DATABASE_FLAT_TABLE];
-  var lastError = null;
-  for (var i = 0; i < sources.length; i++) {
-    try {
-      return {
-        source: sources[i],
-        rows: runBigQueryQuery_(queryFactory(sources[i]), [])
-      };
-    } catch (error) {
-      lastError = error;
-    }
+  // Use only the native reporting view (matches Executive Dashboard)
+  // The database_flat table doesn't have dateReceivedDate as a proper DATE column
+  var source = BIGQUERY_NATIVE_REPORTING_VIEW;
+  try {
+    return {
+      source: source,
+      rows: runBigQueryQuery_(queryFactory(source), [])
+    };
+  } catch (error) {
+    Logger.log("[DASHBOARD QUERY ERROR] Failed to query " + source + ": " + error.toString());
+    throw new Error("Unable to query dashboard source: " + error.message);
   }
-  throw lastError || new Error("Unable to query dashboard sources.");
+}
+
+function getDashboardCanonicalStatusExpression_() {
+  return [
+    "CASE",
+    "  WHEN LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%for evaluation%' THEN 'For Evaluation'",
+    "  WHEN LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%evaluated%' OR LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%for verification%' THEN 'Evaluated'",
+    "  WHEN LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%deficien%' THEN 'Deficiency'",
+    "  WHEN LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%verified%' THEN 'Verified'",
+    "  WHEN LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%for signature%' OR LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%for signing%' OR LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) = 'signature' THEN 'For Signature'",
+    "  WHEN LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%for release%' OR LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%ready for release%' OR LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%pending release%' OR LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%releasing%' THEN 'For Release'",
+    "  WHEN LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%released%' OR LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%release complete%' OR LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%completed%' THEN 'Released'",
+    "  WHEN LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%approved%' OR LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%approeved%' OR LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%arpproved%' THEN 'Approved'",
+    "  WHEN LOWER(TRIM(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), ''))) LIKE '%cancel%' THEN 'Cancelled'",
+    "  ELSE ''",
+    "END"
+  ].join("\n");
+}
+
+function getDashboardPresetAnchorDate_() {
+  try {
+    var cache = CacheService.getScriptCache();
+    var cacheKey = "dashboard:presetAnchorDate";
+    var cached = cache.get(cacheKey);
+    if (cached) return cached;
+    
+    var result = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT CAST(MAX(dateReceivedDate) AS STRING) AS maxDate",
+        "FROM " + source,
+        "WHERE dateReceivedDate IS NOT NULL"
+      ].join("\n");
+    });
+    var firstRow = result.rows && result.rows[0] ? result.rows[0].f || [] : [];
+    var anchorDate = String(firstRow[0] && firstRow[0].v || "").trim();
+    if (anchorDate) {
+      cache.put(cacheKey, anchorDate, 3600); // Cache for 1 hour
+      return anchorDate;
+    }
+  } catch (e) {
+    Logger.log("[ANCHOR DATE] Error: " + e.toString());
+  }
+  return Utilities.formatDate(new Date(), "GMT", "yyyy-MM-dd");
+}
+
+function buildDashboardWhereClause_(filters) {
+  var clauses = ["1=1"];
+  
+  Logger.log("[WHERE] Building WHERE clause with filters: " + JSON.stringify(filters));
+  
+  // Use normalized filter values (empty string means "ALL")
+  // Match Executive Dashboard: use direct column comparison without CAST
+  if (filters.es2InCharge) {
+    clauses.push("es2InCharge = '" + filters.es2InCharge + "'");
+    Logger.log("[WHERE] Added ES2 filter: " + filters.es2InCharge);
+  }
+  if (filters.program) {
+    clauses.push("program = '" + filters.program + "'");
+    Logger.log("[WHERE] Added Program filter: " + filters.program);
+  }
+  if (filters.applicationStatus) {
+    // Use canonical status expression for status filtering
+    var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
+    clauses.push("(" + canonicalStatusExpression + ") = '" + filters.applicationStatus + "'");
+    Logger.log("[WHERE] Added Status filter: " + filters.applicationStatus);
+  }
+  if (filters.transactionType) {
+    clauses.push("transactionType = '" + filters.transactionType + "'");
+    Logger.log("[WHERE] Added Transaction Type filter: " + filters.transactionType);
+  }
+  if (filters.hei) {
+    clauses.push("hei = '" + filters.hei + "'");
+    Logger.log("[WHERE] Added HEI filter: " + filters.hei);
+  }
+  
+  // Use normalized dateFrom/dateTo (already resolved by normalizeFilters_)
+  var dateExpression = "dateReceivedDate";
+  
+  if (filters.dateFrom) {
+    clauses.push(dateExpression + " >= DATE('" + filters.dateFrom + "')");
+    Logger.log("[WHERE] Added dateFrom: " + filters.dateFrom);
+  }
+  if (filters.dateTo) {
+    clauses.push(dateExpression + " <= DATE('" + filters.dateTo + "')");
+    Logger.log("[WHERE] Added dateTo: " + filters.dateTo);
+  }
+  
+  var whereClause = clauses.join(" AND ");
+  Logger.log("[WHERE] Final WHERE clause: " + whereClause);
+  return whereClause;
 }
 
 function getDashboardSummary_(filters) {
+  var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
+  var whereClause = buildDashboardWhereClause_(filters);
   var result = runDashboardBigQueryOverSources_(function(source) {
     return [
       "SELECT",
       "  COUNT(1) AS totalCount,",
-      "  SUM(CASE WHEN LOWER(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), '')) = 'released' THEN 1 ELSE 0 END) AS releasedCount,",
-      "  SUM(CASE WHEN LOWER(COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), '')) != 'released' THEN 1 ELSE 0 END) AS pendingCount,",
-      "  AVG(SAFE_CAST(DATE_DIFF(CURRENT_DATE(), DATE(dateReceived), DAY) AS FLOAT64)) AS avgAgeDays",
-      "FROM " + source
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'For Evaluation' THEN 1 ELSE 0 END) AS forEvaluationCount,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'Evaluated' THEN 1 ELSE 0 END) AS evaluatedCount,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'Deficiency' THEN 1 ELSE 0 END) AS deficiencyCount,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'Approved' THEN 1 ELSE 0 END) AS approvedCount,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'Verified' THEN 1 ELSE 0 END) AS verifiedCount,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'For Signature' THEN 1 ELSE 0 END) AS forSignatureCount,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'For Release' THEN 1 ELSE 0 END) AS forReleaseCount,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'Released' THEN 1 ELSE 0 END) AS releasedCount,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'Cancelled' THEN 1 ELSE 0 END) AS cancelledCount",
+      "FROM " + source,
+      "WHERE " + whereClause
     ].join("\n");
   });
   var rows = mapBigQueryRows_(result.rows, function(values) {
     return {
       totalCount: Number(values[0] || 0),
-      releasedCount: Number(values[1] || 0),
-      pendingCount: Number(values[2] || 0),
-      avgAgeDays: Number(values[3] || 0)
+      forEvaluationCount: Number(values[1] || 0),
+      evaluatedCount: Number(values[2] || 0),
+      deficiencyCount: Number(values[3] || 0),
+      approvedCount: Number(values[4] || 0),
+      verifiedCount: Number(values[5] || 0),
+      forSignatureCount: Number(values[6] || 0),
+      forReleaseCount: Number(values[7] || 0),
+      releasedCount: Number(values[8] || 0),
+      cancelledCount: Number(values[9] || 0)
     };
   });
   return {
     source: result.source,
-    values: rows[0] || { totalCount: 0, releasedCount: 0, pendingCount: 0, avgAgeDays: 0 }
+    values: rows[0] || { totalCount: 0, forEvaluationCount: 0, evaluatedCount: 0, deficiencyCount: 0, approvedCount: 0, verifiedCount: 0, forSignatureCount: 0, forReleaseCount: 0, releasedCount: 0, cancelledCount: 0 }
   };
 }
 
 function getDashboardStatusDistribution_(filters) {
+  var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
+  var whereClause = buildDashboardWhereClause_(filters);
   var result = runDashboardBigQueryOverSources_(function(source) {
     return [
       "SELECT",
-      "  COALESCE(CAST(canonicalStatus AS STRING), CAST(applicationStatus AS STRING), CAST(statusOfApplication AS STRING), 'Unknown') AS statusLabel,",
+      "  " + canonicalStatusExpression + " AS statusLabel,",
       "  COUNT(1) AS statusCount",
       "FROM " + source,
+      "WHERE " + whereClause,
       "GROUP BY statusLabel",
-      "ORDER BY statusCount DESC",
-      "LIMIT 8"
+      "ORDER BY statusCount DESC"
     ].join("\n");
   });
   return {
@@ -2314,92 +2640,1476 @@ function getDashboardStatusDistribution_(filters) {
 }
 
 function getDashboardWorkloadSummary_(filters) {
+  var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
+  var whereClause = buildDashboardWhereClause_(filters);
   var result = runDashboardBigQueryOverSources_(function(source) {
     return [
       "SELECT",
       "  COALESCE(CAST(es2InCharge AS STRING), 'Unassigned') AS ownerLabel,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'Approved' THEN 1 ELSE 0 END) AS approvedCount,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") = 'Deficiency' THEN 1 ELSE 0 END) AS deficiencyCount,",
+      "  SUM(CASE WHEN (" + canonicalStatusExpression + ") NOT IN ('Approved', 'Released', 'Cancelled', 'Deficiency', '') THEN 1 ELSE 0 END) AS processingPendingCount,",
       "  COUNT(1) AS workloadCount",
       "FROM " + source,
+      "WHERE " + whereClause,
       "GROUP BY ownerLabel",
       "ORDER BY workloadCount DESC",
-      "LIMIT 6"
+      "LIMIT 12"
     ].join("\n");
   });
   return {
     source: result.source,
     rows: mapBigQueryRows_(result.rows, function(values) {
       return {
-        label: String(values[0] || "Unassigned"),
+        es2: String(values[0] || "Unassigned"),
+        approvedCount: Number(values[1] || 0),
+        deficiencyCount: Number(values[2] || 0),
+        processingPendingCount: Number(values[3] || 0),
+        totalApplications: Number(values[4] || 0)
+      };
+    })
+  };
+}
+
+function getDashboardTopPrograms_(filters) {
+  var whereClause = buildDashboardWhereClause_(filters);
+  Logger.log("[TOP PROGRAMS] whereClause: " + whereClause);
+  Logger.log("[TOP PROGRAMS] Filters received: " + JSON.stringify(filters));
+  try {
+    var result = runDashboardBigQueryOverSources_(function(source) {
+      // Match Executive Dashboard query format
+      var query = [
+        "SELECT",
+        "  program,",
+        "  COUNT(*) AS total",
+        "FROM " + source,
+        "WHERE " + whereClause,
+        "GROUP BY program",
+        "ORDER BY total DESC, program ASC",
+        "LIMIT 10"
+      ].join("\n");
+      Logger.log("[TOP PROGRAMS] Query: " + query);
+      return query;
+    });
+    Logger.log("[TOP PROGRAMS] Returned " + (result.rows ? result.rows.length : 0) + " rows from " + result.source);
+    
+    return {
+      source: result.source,
+      rows: mapBigQueryRows_(result.rows, function(values) {
+        var program = String(values[0] || "").trim();
+        return {
+          program: program || "Unspecified Program",
+          total: Number(values[1] || 0),
+          value: Number(values[1] || 0) // Keep value for backward compatibility
+        };
+      }).map(function(row, index) {
+        row.rank = index + 1;
+        return row;
+      })
+    };
+  } catch (e) {
+    Logger.log("[TOP PROGRAMS] ERROR: " + e.toString());
+    return { source: "error", rows: [] };
+  }
+}
+
+function getDashboardLocationLoad_(filters) {
+  var whereClause = buildDashboardWhereClause_(filters);
+  var result = runDashboardBigQueryOverSources_(function(source) {
+    return [
+      "SELECT",
+      "  COALESCE(CAST(currentLocation AS STRING), 'Unknown') AS loc,",
+      "  COUNT(1) AS c",
+      "FROM " + source,
+      "WHERE " + whereClause,
+      "GROUP BY loc",
+      "ORDER BY c DESC"
+    ].join("\n");
+  });
+  return {
+    source: result.source,
+    rows: mapBigQueryRows_(result.rows, function(values) {
+      return {
+        label: String(values[0] || "Unknown"),
         value: Number(values[1] || 0)
       };
     })
   };
 }
 
-function getDashboardTurnaroundAnalytics_(filters) {
+function getDashboardMonthlyVolume_(filters) {
+  var whereClause = buildDashboardWhereClause_(filters);
+  Logger.log("[MONTHLY] whereClause: " + whereClause);
+  try {
+    var result = runDashboardBigQueryOverSources_(function(source) {
+      var query = [
+        "SELECT",
+        "  FORMAT_DATE('%B %Y', dateReceivedDate) AS label,",
+        "  FORMAT_DATE('%Y-%m', dateReceivedDate) AS monthKey,",
+        "  COUNT(*) AS total",
+        "FROM " + source,
+        "WHERE " + whereClause,
+        "AND dateReceivedDate IS NOT NULL",
+        "GROUP BY label, monthKey",
+        "ORDER BY monthKey DESC"
+      ].join("\n");
+      Logger.log("[MONTHLY] Query: " + query.substring(0, 300));
+      return query;
+    });
+    Logger.log("[MONTHLY] Returned " + (result.rows ? result.rows.length : 0) + " rows");
+    return {
+      source: result.source,
+      rows: mapBigQueryRows_(result.rows, function(values) {
+        return {
+          label: String(values[0] || ""),
+          value: Number(values[2] || 0)
+        };
+      })
+    };
+  } catch (e) {
+    Logger.log("[MONTHLY] ERROR: " + e.toString());
+    return { source: "error", rows: [] };
+  }
+}
+
+function getDashboardSlaRows_(filters) {
+  var whereClause = buildDashboardWhereClause_(filters);
+  Logger.log("[SLA] whereClause: " + whereClause);
+  try {
+    var result = runDashboardBigQueryOverSources_(function(source) {
+      var query = [
+        "SELECT",
+        "  SUM(CASE WHEN targetReleaseDate IS NOT NULL AND canonicalStatus NOT IN ('Released', 'Cancelled', '') AND targetReleaseDate < CURRENT_DATE('Asia/Singapore') THEN 1 ELSE 0 END) AS overdue,",
+        "  SUM(CASE WHEN targetReleaseDate IS NOT NULL AND canonicalStatus NOT IN ('Released', 'Cancelled', '') AND DATE_DIFF(targetReleaseDate, CURRENT_DATE('Asia/Singapore'), DAY) BETWEEN 0 AND 3 THEN 1 ELSE 0 END) AS nearingDeadline",
+        "FROM " + source,
+        "WHERE " + whereClause
+      ].join("\n");
+      Logger.log("[SLA] Query: " + query.substring(0, 300));
+      return query;
+    });
+    Logger.log("[SLA] Returned " + (result.rows ? result.rows.length : 0) + " rows");
+    
+    var firstRow = result.rows && result.rows[0] ? result.rows[0].f || [] : [];
+    return {
+      source: result.source,
+      rows: [
+        { label: "Nearing Deadline", value: Number(firstRow[1] && firstRow[1].v || 0) },
+        { label: "Overdue", value: Number(firstRow[0] && firstRow[0].v || 0) }
+      ]
+    };
+  } catch (e) {
+    Logger.log("[SLA] ERROR: " + e.toString());
+    return { source: "error", rows: [{ label: "Nearing Deadline", value: 0 }, { label: "Overdue", value: 0 }] };
+  }
+}
+
+function getDashboardBacklogRows_(filters) {
+  var whereClause = buildDashboardWhereClause_(filters);
   var result = runDashboardBigQueryOverSources_(function(source) {
     return [
       "SELECT",
-      "  COALESCE(CAST(currentStageLabel AS STRING), CAST(currentStage AS STRING), 'Unknown Stage') AS stageLabel,",
-      "  AVG(SAFE_CAST(DATE_DIFF(CURRENT_DATE(), DATE(dateReceived), DAY) AS FLOAT64)) AS avgDays,",
-      "  MAX(SAFE_CAST(DATE_DIFF(CURRENT_DATE(), DATE(dateReceived), DAY) AS FLOAT64)) AS maxDays,",
-      "  MIN(SAFE_CAST(DATE_DIFF(CURRENT_DATE(), DATE(dateReceived), DAY) AS FLOAT64)) AS minDays,",
-      "  COUNT(1) AS recordCount",
+      "  COALESCE(CAST(currentStageLabel AS STRING), 'Unknown') AS stage,",
+      "  COUNT(1) AS c",
       "FROM " + source,
-      "WHERE dateReceived IS NOT NULL",
-      "GROUP BY stageLabel",
-      "ORDER BY avgDays DESC",
-      "LIMIT 6"
+      "WHERE " + whereClause,
+      "GROUP BY stage",
+      "ORDER BY c DESC"
     ].join("\n");
-  });
-  var rows = mapBigQueryRows_(result.rows, function(values) {
-    return {
-      label: String(values[0] || "Unknown Stage"),
-      avgDays: Number(values[1] || 0),
-      maxDays: Number(values[2] || 0),
-      minDays: Number(values[3] || 0),
-      count: Number(values[4] || 0)
-    };
   });
   return {
     source: result.source,
-    summary: rows.length ? {
-      avgDays: rows.reduce(function(sum, row) { return sum + row.avgDays; }, 0) / rows.length,
-      maxDays: rows.reduce(function(best, row) { return Math.max(best, row.maxDays); }, 0),
-      minDays: rows.reduce(function(best, row) { return Math.min(best, row.minDays); }, rows[0].minDays),
-      holidayTable: BIGQUERY_HOLIDAYS_TABLE
-    } : {
-      avgDays: 0,
-      maxDays: 0,
-      minDays: 0,
-      holidayTable: BIGQUERY_HOLIDAYS_TABLE
-    },
-    rows: rows
+    rows: mapBigQueryRows_(result.rows, function(values) {
+      return {
+        label: String(values[0] || "Unknown"),
+        value: Number(values[1] || 0)
+      };
+    })
   };
 }
 
-function dashboard_fetchData_(filters) {
-  var summary = getDashboardSummary_(filters || {});
-  var workload = getDashboardWorkloadSummary_(filters || {});
-  var status = getDashboardStatusDistribution_(filters || {});
-  var turnaround = getDashboardTurnaroundAnalytics_(filters || {});
+function getDashboardProductivityRows_(filters) {
+  var whereClause = buildDashboardWhereClause_(filters);
+  Logger.log("[PRODUCTIVITY] whereClause: " + whereClause);
+  try {
+    var result = runDashboardBigQueryOverSources_(function(source) {
+      var query = [
+        "SELECT",
+        "  TRIM(person) AS person,",
+        "  COUNT(DISTINCT t0.recordId) AS totalHandled,",
+        "  SUM(CASE WHEN t0.canonicalStatus = 'Released' THEN 1 ELSE 0 END) AS completed,",
+        "  SUM(CASE WHEN t0.canonicalStatus != 'Released' THEN 1 ELSE 0 END) AS pending",
+        "FROM " + source + " AS t0,",
+        "UNNEST(SPLIT(COALESCE(t0.responsiblePeopleText, ''), ',')) AS person",
+        "WHERE " + whereClause,
+        "AND TRIM(person) != ''",
+        "GROUP BY TRIM(person)",
+        "ORDER BY totalHandled DESC"
+      ].join("\n");
+      Logger.log("[PRODUCTIVITY] Query: " + query.substring(0, 300));
+      return query;
+    });
+    Logger.log("[PRODUCTIVITY] Returned " + (result.rows ? result.rows.length : 0) + " rows");
+    return {
+      source: result.source,
+      rows: mapBigQueryRows_(result.rows, function(values) {
+        var person = String(values[0] || "").trim();
+        var totalHandled = Number(values[1] || 0);
+        var completed = Number(values[2] || 0);
+        var pending = Number(values[3] || 0);
+        return {
+          person: person || "Unknown",
+          totalHandled: totalHandled,
+          completed: completed,
+          pending: pending
+        };
+      })
+    };
+  } catch (e) {
+    Logger.log("[PRODUCTIVITY] ERROR: " + e.toString());
+    return { source: "error", rows: [] };
+  }
+}
 
+function getDashboardTurnaroundAnalytics_(filters) {
+  // Full Executive Dashboard implementation with multi-stage tracking and groups
+  var turnaroundSource = getDashboardTurnaroundSource_();
+  var whereClause = buildDashboardWhereClause_(filters);
+  var holidayTableAvailable = true;
+  var holidayContextSql = "SELECT ARRAY_AGG(holidayDate) AS holidayDates FROM " + BIGQUERY_HOLIDAYS_TABLE;
+  
+  var stageDateExpressions = turnaroundSource.stageDateExpressions || {
+    dateReceivedDate: "dateReceivedDate",
+    verificationDateReceived: "CAST(NULL AS DATE)",
+    issuanceDateReceived: "CAST(NULL AS DATE)",
+    deficiencyDateReceived: "CAST(NULL AS DATE)",
+    releaseDateReceived: "CAST(NULL AS DATE)"
+  };
+  var evaluationStatusExpression = turnaroundSource.evaluationStatusExpression || "CAST(NULL AS STRING)";
+  
+  var transitions = [
+    { key: "dateToVerification", label: "Date Received -> Verification" },
+    { key: "verificationToIssuance", label: "Verification -> Issuance" },
+    { key: "issuanceToDeficiency", label: "Issuance -> Deficiency" },
+    { key: "deficiencyToRelease", label: "Deficiency -> Release" }
+  ];
+  
+  var businessDayExpressions = {
+    total: buildBusinessDayCountSql_("orderedDates[OFFSET(0)]", "orderedDates[OFFSET(ARRAY_LENGTH(orderedDates) - 1)]", "holidayDates"),
+    dateToVerification: buildBusinessDayCountSql_("dateReceivedDate", "verificationDateReceived", "holidayDates"),
+    verificationToIssuance: buildBusinessDayCountSql_("verificationDateReceived", "issuanceDateReceived", "holidayDates"),
+    issuanceToDeficiency: buildBusinessDayCountSql_("issuanceDateReceived", "deficiencyDateReceived", "holidayDates"),
+    deficiencyToRelease: buildBusinessDayCountSql_("deficiencyDateReceived", "releaseDateReceived", "holidayDates")
+  };
+  
+  try {
+    var result = runDashboardBigQueryOverSources_(function(source) {
+      var effectiveSource = turnaroundSource.sourceRef || source;
+      
+      // Build transition select lines for prepared CTE
+      var transitionSelectLines = transitions.map(function(t) {
+        return "    " + businessDayExpressions[t.key] + " AS " + t.key;
+      });
+      
+      // Build transition summary lines for summary CTE
+      var transitionSummaryLines = transitions.map(function(t) {
+        return "    AVG(" + t.key + ") AS avg_" + t.key + ",\n    COUNT(" + t.key + ") AS count_" + t.key;
+      });
+      
+      // Build transition group lines for grouped CTE
+      var transitionGroupLines = transitions.map(function(t) {
+        return "    AVG(" + t.key + ") AS avg_" + t.key + ",\n    COUNT(" + t.key + ") AS count_" + t.key;
+      });
+      
+      // Build null placeholders for summary row
+      var transitionNullLines = transitions.map(function() {
+        return "  CAST(NULL AS FLOAT64),\n  CAST(NULL AS INT64)";
+      });
+      
+      // Build grouped transition queries for UNION ALL
+      var groupedTransitionQueries = transitions.map(function(t) {
+        return [
+          "SELECT",
+          "  'grouped-transition' AS rowType,",
+          "  evaluationStatus,",
+          "  '" + t.key + "' AS metricKey,",
+          "  CONCAT(evaluationStatus, ' - " + t.label.replace(/'/g, "''") + "') AS metricLabel,",
+          "  CAST(NULL AS INT64) AS eligibleRecordCount,",
+          "  CAST(NULL AS FLOAT64) AS averageTotalDays,",
+          "  CAST(NULL AS FLOAT64) AS medianTotalDays,",
+          transitionNullLines.join(",\n"),
+          ", statusCount,",
+          "  avg_" + t.key + " AS metricAverage,",
+          "  count_" + t.key + " AS metricSampleCount",
+          "FROM grouped"
+        ].join("\n");
+      });
+      
+      var query = [
+        "WITH holiday_context AS (",
+        "  " + holidayContextSql,
+        "), filtered AS (",
+        "  SELECT",
+        "    COALESCE(NULLIF(TRIM(" + evaluationStatusExpression + "), ''), 'Unspecified') AS evaluationStatus,",
+        "    " + stageDateExpressions.dateReceivedDate + " AS dateReceivedDate,",
+        "    " + stageDateExpressions.verificationDateReceived + " AS verificationDateReceived,",
+        "    " + stageDateExpressions.issuanceDateReceived + " AS issuanceDateReceived,",
+        "    " + stageDateExpressions.deficiencyDateReceived + " AS deficiencyDateReceived,",
+        "    " + stageDateExpressions.releaseDateReceived + " AS releaseDateReceived,",
+        "    holidayDates",
+        "  FROM " + effectiveSource,
+        "  CROSS JOIN holiday_context",
+        "  WHERE " + whereClause,
+        "), prepared AS (",
+        "  SELECT",
+        "    evaluationStatus,",
+        "    orderedDates,",
+        "    holidayDates,",
+        "    ARRAY_LENGTH(orderedDates) AS nonNullStageCount,",
+        "    " + businessDayExpressions.total + " AS totalTurnaroundDays,",
+        transitionSelectLines.join(",\n"),
+        "  FROM (",
+        "    SELECT",
+        "      evaluationStatus,",
+        "      holidayDates,",
+        "      ARRAY(",
+        "        SELECT stageDate",
+        "        FROM UNNEST([dateReceivedDate, verificationDateReceived, issuanceDateReceived, deficiencyDateReceived, releaseDateReceived]) AS stageDate",
+        "        WHERE stageDate IS NOT NULL",
+        "        ORDER BY stageDate",
+        "      ) AS orderedDates,",
+        "      dateReceivedDate,",
+        "      verificationDateReceived,",
+        "      issuanceDateReceived,",
+        "      deficiencyDateReceived,",
+        "      releaseDateReceived",
+        "    FROM filtered",
+        "  )",
+        "), eligible AS (",
+        "  SELECT *",
+        "  FROM prepared",
+        "  WHERE nonNullStageCount >= 2",
+        "), summary AS (",
+        "  SELECT",
+        "    COUNT(*) AS eligibleRecordCount,",
+        "    AVG(totalTurnaroundDays) AS averageTotalDays,",
+        "    APPROX_QUANTILES(totalTurnaroundDays, 100)[OFFSET(50)] AS medianTotalDays,",
+        transitionSummaryLines.join(",\n"),
+        "  FROM eligible",
+        "), grouped AS (",
+        "  SELECT",
+        "    evaluationStatus,",
+        "    COUNT(*) AS statusCount,",
+        "    AVG(totalTurnaroundDays) AS avgTotalDays,",
+        transitionGroupLines.join(",\n"),
+        "  FROM eligible",
+        "  GROUP BY evaluationStatus",
+        ")",
+        "SELECT",
+        "  'summary' AS rowType,",
+        "  CAST(NULL AS STRING) AS evaluationStatus,",
+        "  CAST(NULL AS STRING) AS metricKey,",
+        "  CAST(NULL AS STRING) AS metricLabel,",
+        "  eligibleRecordCount,",
+        "  averageTotalDays,",
+        "  medianTotalDays,",
+        transitionNullLines.join(",\n"),
+        ", CAST(NULL AS INT64) AS statusCount,",
+        "  CAST(NULL AS FLOAT64) AS metricAverage,",
+        "  CAST(NULL AS INT64) AS metricSampleCount",
+        "FROM summary",
+        "UNION ALL",
+        "SELECT",
+        "  'grouped-total' AS rowType,",
+        "  evaluationStatus,",
+        "  'total' AS metricKey,",
+        "  CONCAT(evaluationStatus, ' - Total Turnaround') AS metricLabel,",
+        "  CAST(NULL AS INT64) AS eligibleRecordCount,",
+        "  CAST(NULL AS FLOAT64) AS averageTotalDays,",
+        "  CAST(NULL AS FLOAT64) AS medianTotalDays,",
+        transitionNullLines.join(",\n"),
+        ", statusCount,",
+        "  avgTotalDays AS metricAverage,",
+        "  statusCount AS metricSampleCount",
+        "FROM grouped",
+        "UNION ALL",
+        groupedTransitionQueries.join("\nUNION ALL\n")
+      ].join("\n");
+      
+      Logger.log("[TURNAROUND] Query length: " + query.length);
+      return query;
+    });
+    
+    Logger.log("[TURNAROUND] Returned " + (result.rows ? result.rows.length : 0) + " rows");
+    
+    if (!result.rows || result.rows.length === 0) {
+      return {
+        source: result.source,
+        summary: { eligibleRecordCount: 0, averageTotalDays: 0, medianTotalDays: 0 },
+        highlights: [],
+        groups: []
+      };
+    }
+    
+    // Parse all rows
+    var parsedRows = result.rows.map(function(row) {
+      var values = row.f || [];
+      return {
+        rowType: String(values[0] ? values[0].v : ""),
+        evaluationStatus: String(values[1] ? values[1].v : ""),
+        metricKey: String(values[2] ? values[2].v : ""),
+        metricLabel: String(values[3] ? values[3].v : ""),
+        eligibleRecordCount: Number(values[4] ? values[4].v : 0),
+        averageTotalDays: Number(values[5] ? values[5].v : 0),
+        medianTotalDays: Number(values[6] ? values[6].v : 0),
+        avgDateToVerification: Number(values[7] ? values[7].v : 0),
+        countDateToVerification: Number(values[8] ? values[8].v : 0),
+        avgVerificationToIssuance: Number(values[9] ? values[9].v : 0),
+        countVerificationToIssuance: Number(values[10] ? values[10].v : 0),
+        avgIssuanceToDeficiency: Number(values[11] ? values[11].v : 0),
+        countIssuanceToDeficiency: Number(values[12] ? values[12].v : 0),
+        avgDeficiencyToRelease: Number(values[13] ? values[13].v : 0),
+        countDeficiencyToRelease: Number(values[14] ? values[14].v : 0),
+        statusCount: Number(values[15] ? values[15].v : 0),
+        metricAverage: Number(values[16] ? values[16].v : 0),
+        metricSampleCount: Number(values[17] ? values[17].v : 0)
+      };
+    });
+    
+    // Extract summary row (ES5 compatible)
+    var summaryRow = { eligibleRecordCount: 0, averageTotalDays: 0, medianTotalDays: 0 };
+    for (var i = 0; i < parsedRows.length; i++) {
+      if (parsedRows[i].rowType === "summary") {
+        summaryRow = parsedRows[i];
+        break;
+      }
+    }
+    
+    var summary = {
+      eligibleRecordCount: summaryRow.eligibleRecordCount,
+      averageTotalDays: summaryRow.averageTotalDays,
+      medianTotalDays: summaryRow.medianTotalDays
+    };
+    
+    // Build highlights from summary row transitions
+    var highlights = [];
+    var transitionData = [
+      { key: "dateToVerification", label: "Date Received -> Verification", avg: summaryRow.avgDateToVerification, count: summaryRow.countDateToVerification },
+      { key: "verificationToIssuance", label: "Verification -> Issuance", avg: summaryRow.avgVerificationToIssuance, count: summaryRow.countVerificationToIssuance },
+      { key: "issuanceToDeficiency", label: "Issuance -> Deficiency", avg: summaryRow.avgIssuanceToDeficiency, count: summaryRow.countIssuanceToDeficiency },
+      { key: "deficiencyToRelease", label: "Deficiency -> Release", avg: summaryRow.avgDeficiencyToRelease, count: summaryRow.countDeficiencyToRelease }
+    ];
+    
+    transitionData.forEach(function(t) {
+      if (t.count > 0) {
+        highlights.push({
+          label: t.label,
+          primary: Math.round(t.avg * 10) / 10 + " days",
+          secondary: t.count + " records",
+          avgDays: t.avg,
+          sampleCount: t.count
+        });
+      }
+    });
+    
+    // Build groups from grouped rows
+    var groupedMetrics = parsedRows.filter(function(r) {
+      return r.rowType === "grouped-total" || r.rowType === "grouped-transition";
+    });
+    
+    var groupsMap = {};
+    groupedMetrics.forEach(function(row) {
+      var status = row.evaluationStatus || "Unspecified";
+      if (!groupsMap[status]) {
+        groupsMap[status] = {
+          label: status,
+          sampleCount: 0,
+          metrics: []
+        };
+      }
+      
+      var metricAvg = row.metricAverage || 0;
+      var metricCount = row.metricSampleCount || 0;
+      if (metricCount <= 0 || metricAvg <= 0) return;
+      
+      if (row.metricKey === "total") {
+        groupsMap[status].sampleCount = Math.max(groupsMap[status].sampleCount, metricCount);
+        groupsMap[status].metrics.unshift({
+          key: "total",
+          label: "Total Turnaround",
+          averageDays: metricAvg,
+          sampleCount: metricCount,
+          isTotal: true
+        });
+      } else {
+        // ES5 compatible find
+        var transition = null;
+        for (var tIdx = 0; tIdx < transitions.length; tIdx++) {
+          if (transitions[tIdx].key === row.metricKey) {
+            transition = transitions[tIdx];
+            break;
+          }
+        }
+        if (transition) {
+          groupsMap[status].sampleCount = Math.max(groupsMap[status].sampleCount, metricCount);
+          groupsMap[status].metrics.push({
+            key: row.metricKey,
+            label: transition.label,
+            averageDays: metricAvg,
+            sampleCount: metricCount,
+            isTotal: false
+          });
+        }
+      }
+    });
+    
+    // Convert groups map to array (ES5 compatible), sorted by sample count
+    var groups = Object.keys(groupsMap).map(function(key) { return groupsMap[key]; }).sort(function(a, b) {
+      return b.sampleCount - a.sampleCount;
+    });
+    
+    return {
+      source: result.source,
+      summary: summary,
+      highlights: highlights,
+      groups: groups
+    };
+    
+  } catch (e) {
+    Logger.log("[TURNAROUND] ERROR: " + e.toString());
+    return {
+      source: "error",
+      summary: { eligibleRecordCount: 0, averageTotalDays: 0, medianTotalDays: 0 },
+      highlights: [],
+      groups: []
+    };
+  }
+}
+
+// Turnaround Analytics helper functions (from Executive Dashboard)
+function bigQueryTableExists_(datasetId, tableName) {
+  try {
+    // Try to query the table to check if it exists
+    var query = "SELECT 1 FROM `" + BIGQUERY_PROJECT_ID + "." + datasetId + "." + tableName + "` LIMIT 0";
+    BigQuery.Jobs.query({ query: query, useLegacySql: false }, BIGQUERY_PROJECT_ID);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function getBigQueryTableColumns_(datasetId, tableName) {
+  try {
+    var query = [
+      "SELECT column_name, data_type",
+      "FROM `" + BIGQUERY_PROJECT_ID + "." + datasetId + ".INFORMATION_SCHEMA.COLUMNS`",
+      "WHERE table_name = '" + tableName + "'"
+    ].join("\n");
+    var result = BigQuery.Jobs.query({ query: query, useLegacySql: false }, BIGQUERY_PROJECT_ID);
+    var columns = {};
+    if (result.rows) {
+      result.rows.forEach(function(row) {
+        columns[String(row.f[0].v)] = String(row.f[1].v);
+      });
+    }
+    return columns;
+  } catch (e) {
+    Logger.log("[COLUMNS] Error getting columns: " + e.toString());
+    return {};
+  }
+}
+
+function buildBusinessDayCountSql_(startExpression, endExpression, holidayArrayExpression) {
+  var holidayFilterSql = holidayArrayExpression
+    ? "AND businessDate NOT IN UNNEST(COALESCE(" + holidayArrayExpression + ", CAST([] AS ARRAY<DATE>)))"
+    : "";
+  return [
+    "(SELECT COUNT(*) FROM UNNEST(GENERATE_DATE_ARRAY(",
+    "  CAST(" + startExpression + " AS DATE),",
+    "  CAST(" + endExpression + " AS DATE),",
+    "  INTERVAL 1 DAY",
+    ")) AS businessDate",
+    "WHERE EXTRACT(DAYOFWEEK FROM businessDate) BETWEEN 2 AND 6", // Monday=2 to Friday=6
+    holidayFilterSql,
+    ")"
+  ].join("\n");
+}
+
+function getDashboardTurnaroundSource_() {
+  var datasetRef = BIGQUERY_PROJECT_ID + "." + BIGQUERY_DATASET_ID;
+  var candidates = [
+    { tableName: "reporting_flat_native", sourceRef: "`" + datasetRef + ".reporting_flat_native`", sourceKind: "native" },
+    { tableName: "reporting_flat_native_view", sourceRef: "`" + datasetRef + ".reporting_flat_native_view`", sourceKind: "nativeView" },
+    { tableName: "reporting_flat_native_plain", sourceRef: "`" + datasetRef + ".reporting_flat_native_plain`", sourceKind: "plain" }
+  ];
+  var stageSpecs = [
+    { sourceColumn: "dateReceivedDate", outputName: "dateReceivedDate" },
+    { sourceColumn: "dateReceived", outputName: "dateReceivedDate" },
+    { sourceColumn: "verificationDateReceived", outputName: "verificationDateReceived" },
+    { sourceColumn: "issuanceDateReceived", outputName: "issuanceDateReceived" },
+    { sourceColumn: "deficiencyDateReceived", outputName: "deficiencyDateReceived" },
+    { sourceColumn: "releaseDateReceived", outputName: "releaseDateReceived" }
+  ];
+
+  for (var i = 0; i < candidates.length; i++) {
+    var candidate = candidates[i];
+    var columns = getBigQueryTableColumns_(BIGQUERY_DATASET_ID, candidate.tableName);
+    var expressions = {
+      dateReceivedDate: "CAST(NULL AS DATE)",
+      verificationDateReceived: "CAST(NULL AS DATE)",
+      issuanceDateReceived: "CAST(NULL AS DATE)",
+      deficiencyDateReceived: "CAST(NULL AS DATE)",
+      releaseDateReceived: "CAST(NULL AS DATE)"
+    };
+
+    stageSpecs.forEach(function(spec) {
+      if (!columns[spec.sourceColumn]) return;
+      expressions[spec.outputName] = "SAFE_CAST(" + spec.sourceColumn + " AS DATE)";
+    });
+
+    if (expressions.dateReceivedDate === "CAST(NULL AS DATE)") continue;
+
+    return {
+      sourceRef: candidate.sourceRef,
+      sourceKind: candidate.sourceKind,
+      stageDateExpressions: expressions,
+      evaluationStatusExpression: columns.evaluationStatus ? "CAST(evaluationStatus AS STRING)" : "CAST(NULL AS STRING)"
+    };
+  }
+
+  // Fallback to default view
   return {
-    kpis: {
-      totalRecords: Number(summary.values.totalCount || 0),
-      releasedCount: Number(summary.values.releasedCount || 0),
-      pendingCount: Number(summary.values.pendingCount || 0),
-      averageAgeDays: Math.round(Number(summary.values.avgAgeDays || 0) * 10) / 10
+    sourceRef: BIGQUERY_NATIVE_REPORTING_VIEW,
+    sourceKind: "runtime",
+    stageDateExpressions: {
+      dateReceivedDate: "dateReceivedDate",
+      verificationDateReceived: "CAST(NULL AS DATE)",
+      issuanceDateReceived: "CAST(NULL AS DATE)",
+      deficiencyDateReceived: "CAST(NULL AS DATE)",
+      releaseDateReceived: "CAST(NULL AS DATE)"
     },
-    workloadSummary: workload.rows || [],
-    statusDistribution: status.rows || [],
-    turnaroundAnalytics: turnaround,
+    evaluationStatusExpression: "CAST(NULL AS STRING)"
+  };
+}
+
+// Dashboard cache constants
+var DASHBOARD_CACHE_TTL_SECONDS = 300; // 5 minutes
+var DASHBOARD_CACHE_KEY_PREFIX = "dashboard:v1:";
+
+function getDashboardCacheKey_(filters) {
+  // Create a stable cache key from filter values
+  var keyParts = [
+    filters.datePreset || "allTime",
+    filters.dateFrom || "",
+    filters.dateTo || "",
+    filters.program || "ALL",
+    filters.es2InCharge || "ALL",
+    filters.applicationStatus || "ALL",
+    filters.transactionType || "ALL",
+    filters.hei || "ALL"
+  ];
+  return DASHBOARD_CACHE_KEY_PREFIX + keyParts.join(":");
+}
+
+function getCachedDashboardData_(cacheKey) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var cached = cache.get(cacheKey);
+    if (cached) {
+      Logger.log("[CACHE] Cache HIT for key: " + cacheKey);
+      return JSON.parse(cached);
+    }
+    Logger.log("[CACHE] Cache MISS for key: " + cacheKey);
+    return null;
+  } catch (e) {
+    Logger.log("[CACHE] Error reading cache: " + e.toString());
+    return null;
+  }
+}
+
+function setCachedDashboardData_(cacheKey, data) {
+  try {
+    var cache = CacheService.getScriptCache();
+    // Ensure data is serializable
+    var serialized = JSON.stringify(data);
+    // Check size (CacheService has 100KB limit per key)
+    if (serialized.length > 90000) {
+      Logger.log("[CACHE] Data too large to cache (>90KB), skipping cache write");
+      return false;
+    }
+    cache.put(cacheKey, serialized, DASHBOARD_CACHE_TTL_SECONDS);
+    Logger.log("[CACHE] Stored data in cache for key: " + cacheKey + " (TTL: " + DASHBOARD_CACHE_TTL_SECONDS + "s)");
+    return true;
+  } catch (e) {
+    Logger.log("[CACHE] Error writing cache: " + e.toString());
+    return false;
+  }
+}
+
+function clearDashboardCache_() {
+  try {
+    var cache = CacheService.getScriptCache();
+    // Note: CacheService doesn't support wildcard deletion, so we just log this
+    Logger.log("[CACHE] Cache clear requested. Individual keys will expire after TTL.");
+    return true;
+  } catch (e) {
+    Logger.log("[CACHE] Error clearing cache: " + e.toString());
+    return false;
+  }
+}
+
+function dashboard_fetchData_(payload) {
+  var rawFilters = payload || {};
+  
+  Logger.log("[FETCH] Raw payload received: " + JSON.stringify(rawFilters));
+  
+  // Normalize filters using Executive Dashboard logic (resolves date presets to actual dates)
+  var filters = normalizeFilters_(rawFilters);
+  
+  Logger.log("[FETCH] Normalized filters: " + JSON.stringify(filters));
+  Logger.log("[FETCH] es2InCharge value: '" + filters.es2InCharge + "' (length: " + (filters.es2InCharge ? filters.es2InCharge.length : 0) + ")");
+  
+  // Check cache first (use normalized filters for cache key)
+  var cacheKey = getDashboardCacheKey_(filters);
+  Logger.log("[FETCH] Cache key: " + cacheKey);
+  
+  var cachedData = getCachedDashboardData_(cacheKey);
+  if (cachedData && cachedData.ok) {
+    Logger.log("[FETCH] Returning cached data for key: " + cacheKey);
+    return cachedData;
+  }
+  Logger.log("[FETCH] Cache miss for key: " + cacheKey);
+  
+  var summary, workload, status, turnaround, topPrograms, locationLoad, monthlyVolume, slaExposure, stageBacklog, productivity;
+  
+  try {
+    summary = getDashboardSummary_(filters);
+    workload = getDashboardWorkloadSummary_(filters);
+    status = getDashboardStatusDistribution_(filters);
+    turnaround = getDashboardTurnaroundAnalytics_(filters);
+    topPrograms = getDashboardTopPrograms_(filters);
+    locationLoad = getDashboardLocationLoad_(filters);
+    monthlyVolume = getDashboardMonthlyVolume_(filters);
+    slaExposure = getDashboardSlaRows_(filters);
+    stageBacklog = getDashboardBacklogRows_(filters);
+    productivity = getDashboardProductivityRows_(filters);
+  } catch (e) {
+    Logger.log("[FETCH] Critical error in sub-fetches: " + e.toString());
+    // Continue with empty results rather than failing the whole request
+  }
+
+  // Build filter options from BigQuery (more reliable than Static sheet)
+  var filterOptions = getDashboardFilterOptionsFromBigQuery_();
+  
+  // Get available years for Monthly Volume filter
+  var availableYears = getBigQueryAvailableYears_();
+  Logger.log("[FETCH] Available years: " + availableYears.length);
+  
+  Logger.log("[FETCH] Filter options from BigQuery: es2Owners=" + filterOptions.es2Owners.length + ", programs=" + filterOptions.programs.length);
+
+  var response = {
+    ok: true,
+    filters: filterOptions,
+    data: {
+      records: [],
+      availableYears: availableYears || []
+    },
+    summary: {
+      totalRecords: Number((summary && summary.values && summary.values.totalCount) || 0),
+      total: Number((summary && summary.values && summary.values.totalCount) || 0),
+      forEvaluation: Number((summary && summary.values && summary.values.forEvaluationCount) || 0),
+      evaluated: Number((summary && summary.values && summary.values.evaluatedCount) || 0),
+      deficiency: Number((summary && summary.values && summary.values.deficiencyCount) || 0),
+      approved: Number((summary && summary.values && summary.values.approvedCount) || 0),
+      verified: Number((summary && summary.values && summary.values.verifiedCount) || 0),
+      forSignature: Number((summary && summary.values && summary.values.forSignatureCount) || 0),
+      forRelease: Number((summary && summary.values && summary.values.forReleaseCount) || 0),
+      released: Number((summary && summary.values && summary.values.releasedCount) || 0),
+      cancelled: Number((summary && summary.values && summary.values.cancelledCount) || 0)
+    },
+    sections: {
+      es2Ownership: { title: "Workload by ES II Owner", rows: (workload && workload.rows) || [] },
+      topPrograms: { title: "Top 10 Programs", rows: (topPrograms && topPrograms.rows) || [] },
+      overallApplicationStatus: { title: "Overall Application Status", rows: (status && status.rows) || [] },
+      statusProgression: { title: "Status Progression Overview", rows: (status && status.rows) || [] },
+      turnaroundTime: turnaround || { title: "Turnaround Time", rows: [] },
+      locationLoad: { title: "Document Location Load", rows: (locationLoad && locationLoad.rows) || [] },
+      monthlyVolume: { title: "Monthly Application Volume", rows: (monthlyVolume && monthlyVolume.rows) || [] },
+      slaExposure: { title: "SLA Exposure", rows: (slaExposure && slaExposure.rows) || [] },
+      stageBacklog: { title: "Workflow Backlog", rows: (stageBacklog && stageBacklog.rows) || [] },
+      productivity: { title: "Assigned Staff Activity", rows: (productivity && productivity.rows) || [] }
+    },
+    referenceData: {
+      availableYears: availableYears || []
+    },
     meta: {
-      source: summary.source || workload.source || status.source || turnaround.source || "",
+      source: (summary && summary.source) || (workload && workload.source) || "",
       dataset: BIGQUERY_DATASET_ID,
-      loadedAt: new Date().toISOString()
+      loadedAt: new Date().toISOString(),
+      recordCount: Number((summary && summary.values && summary.values.totalCount) || 0),
+      totalRecordCount: Number((summary && summary.values && summary.values.totalCount) || 0),
+      appliedFilters: filters,
+      availableYears: availableYears || []
     }
   };
+  
+  Logger.log("[FETCH] Summary total: " + (summary && summary.values && summary.values.totalCount) + ", Filtered es2InCharge: " + filters.es2InCharge);
+  Logger.log("[FETCH] Storing in cache with key: " + cacheKey);
+  
+  // Store in cache for subsequent requests
+  setCachedDashboardData_(cacheKey, response);
+  
+  // FINAL HARDENING: Ensure the object is clean and serializable for the GAS bridge
+  try {
+    var serialized = JSON.stringify(response);
+    return JSON.parse(serialized);
+  } catch (serializationError) {
+    Logger.log("[FETCH] Serialization failure: " + serializationError.toString());
+    return { ok: false, error: "Data serialization failed." };
+  }
+}
+
+function dashboard_getAnalyticsData_(filters) {
+  return dashboard_fetchData_(filters);
+}
+
+function dashboard_refreshDashboardCache_() {
+  return dashboard_fetchData_({});
+}
+
+function getDashboardFilterOptionsFromBigQuery_() {
+  try {
+    // Get distinct ES2 Owners (without CAST to match Executive Dashboard)
+    var es2Result = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT DISTINCT es2InCharge as value",
+        "FROM " + source,
+        "WHERE es2InCharge IS NOT NULL",
+        "ORDER BY value"
+      ].join("\n");
+    });
+    var es2Owners = mapBigQueryRows_(es2Result.rows, function(values) {
+      return String(values[0] || "");
+    }).filter(function(v) { return v !== ""; });
+    
+    // Get distinct Programs (without CAST)
+    var programResult = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT DISTINCT program as value",
+        "FROM " + source,
+        "WHERE program IS NOT NULL",
+        "ORDER BY value"
+      ].join("\n");
+    });
+    var programs = mapBigQueryRows_(programResult.rows, function(values) {
+      return String(values[0] || "");
+    }).filter(function(v) { return v !== ""; });
+    
+    // Get distinct Application Statuses (without CAST)
+    var statusResult = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT DISTINCT applicationStatus as value",
+        "FROM " + source,
+        "WHERE applicationStatus IS NOT NULL",
+        "ORDER BY value"
+      ].join("\n");
+    });
+    var applicationStatuses = mapBigQueryRows_(statusResult.rows, function(values) {
+      return String(values[0] || "");
+    }).filter(function(v) { return v !== ""; });
+    
+    Logger.log("[FILTER_OPTIONS] Loaded from BigQuery: " + es2Owners.length + " ES2, " + programs.length + " Programs, " + applicationStatuses.length + " Statuses");
+    
+    return {
+      es2Owners: es2Owners,
+      programs: programs,
+      applicationStatuses: applicationStatuses,
+      transactionTypes: ["Walk-In", "Online"],
+      heis: [],
+      dateRange: { min: "", max: "" }
+    };
+  } catch (e) {
+    Logger.log("[FILTER_OPTIONS] ERROR loading from BigQuery: " + e.toString());
+    // Fallback to empty arrays
+    return {
+      es2Owners: [],
+      programs: [],
+      applicationStatuses: DASHBOARD_STATUS_ORDER || [],
+      transactionTypes: ["Walk-In", "Online"],
+      heis: [],
+      dateRange: { min: "", max: "" }
+    };
+  }
+}
+
+function dashboard_getDashboardDetail_(kind, name, filters, page, pageSize) {
+  var normalizedKind = String(kind || "").trim();
+  var normalizedName = String(name || "").trim();
+  var currentPage = Math.max(1, parseInt(page) || 1);
+  var pageSizeValue = Math.max(1, Math.min(100, parseInt(pageSize) || 25));
+  // Normalize filters using same logic as main dashboard
+  var currentFilters = normalizeFilters_(filters || {});
+
+  Logger.log("[MODAL] Fetching detail for kind=" + normalizedKind + ", name=" + normalizedName + ", page=" + currentPage);
+
+  try {
+    // Build WHERE clause based on kind
+    var whereClause = buildDashboardWhereClause_(currentFilters);
+    var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
+
+    // Add specific filter for the modal type (match Executive Dashboard approach)
+    var entityFilter = "";
+    if (normalizedKind === "ES II Owner" || normalizedKind === "es2InCharge") {
+      entityFilter = "es2InCharge = '" + normalizedName.replace(/'/g, "\\'") + "'";
+    } else if (normalizedKind === "Application Status" || normalizedKind === "status") {
+      if (normalizedName === "Cancelled") {
+        entityFilter = "(" + canonicalStatusExpression + ") = 'Cancelled'";
+      } else if (normalizedName && normalizedName !== "Total") {
+        entityFilter = "(" + canonicalStatusExpression + ") = '" + normalizedName.replace(/'/g, "\\'") + "'";
+      }
+    } else if (normalizedKind === "Assigned Staff" || normalizedKind === "staff") {
+      // Match Executive Dashboard: use EXISTS with UNNEST on responsiblePeopleText
+      entityFilter = "EXISTS (SELECT 1 FROM UNNEST(SPLIT(COALESCE(responsiblePeopleText, ''), ',')) AS person WHERE TRIM(person) = '" + normalizedName.replace(/'/g, "\\'") + "')";
+    }
+
+    if (entityFilter) {
+      whereClause = whereClause + " AND " + entityFilter;
+    }
+
+    Logger.log("[MODAL] Final whereClause: " + whereClause);
+
+    // Get total count
+    var countResult = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT COUNT(*) AS total",
+        "FROM " + source,
+        "WHERE " + whereClause
+      ].join("\n");
+    });
+    var totalCount = countResult.rows && countResult.rows.length > 0 ?
+      Number(countResult.rows[0].f[0].v || 0) : 0;
+
+    var totalPages = Math.max(1, Math.ceil(totalCount / pageSizeValue));
+    var offset = (currentPage - 1) * pageSizeValue;
+
+    // Get records with pagination (match Executive Dashboard columns)
+    var recordsResult = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT",
+        "  _row,",
+        "  recordId,",
+        "  studentName,",
+        "  program,",
+        "  es2InCharge,",
+        "  applicationStatus,",
+        "  statusValue,",
+        "  " + canonicalStatusExpression + " AS canonicalStatus,",
+        "  transactionType,",
+        "  hei,",
+        "  CAST(dateReceivedDate AS STRING) AS dateReceived,",
+        "  CAST(targetReleaseDate AS STRING) AS targetReleaseDate,",
+        "  currentLocation,",
+        "  currentStage,",
+        "  currentStageLabel,",
+        "  responsiblePeopleText",
+        "FROM " + source,
+        "WHERE " + whereClause,
+        "ORDER BY dateReceivedDate DESC, _row DESC",
+        "LIMIT " + pageSizeValue + " OFFSET " + offset
+      ].join("\n");
+    });
+
+    var records = mapBigQueryRows_(recordsResult.rows, function(values) {
+      var responsiblePeopleText = String(values[15] || "").trim();
+      var responsiblePeople = responsiblePeopleText ? responsiblePeopleText.split(",").map(function(item) {
+        return String(item || "").trim();
+      }).filter(Boolean) : [];
+      return {
+        _row: Number(values[0] || 0),
+        recordId: String(values[1] || ""),
+        studentName: String(values[2] || ""),
+        program: String(values[3] || ""),
+        es2InCharge: String(values[4] || ""),
+        applicationStatus: String(values[5] || ""),
+        statusValue: String(values[6] || ""),
+        canonicalStatus: String(values[7] || ""),
+        transactionType: String(values[8] || ""),
+        hei: String(values[9] || ""),
+        dateReceived: String(values[10] || ""),
+        targetReleaseDate: String(values[11] || ""),
+        currentLocation: String(values[12] || ""),
+        currentStage: String(values[13] || ""),
+        currentStageLabel: String(values[14] || ""),
+        responsiblePeopleText: responsiblePeopleText,
+        responsiblePeople: responsiblePeople,
+        assignedPeople: responsiblePeople
+      };
+    });
+
+    // Program breakdown (match Executive Dashboard format)
+    var summaryResult = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT",
+        "  COALESCE(NULLIF(TRIM(program), ''), 'Unspecified Program') AS label,",
+        "  COUNT(*) AS total",
+        "FROM " + source,
+        "WHERE " + whereClause,
+        "GROUP BY label",
+        "ORDER BY total DESC, label ASC",
+        "LIMIT 8"
+      ].join("\n");
+    });
+    var programs = mapBigQueryRows_(summaryResult.rows, function(values) {
+      return { label: String(values[0] || ""), value: Number(values[1] || 0) };
+    }).filter(function(row) { return row.label; });
+
+    // Transaction type breakdown
+    var txResult = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT",
+        "  COALESCE(NULLIF(TRIM(transactionType), ''), 'Unspecified') AS label,",
+        "  COUNT(*) AS total",
+        "FROM " + source,
+        "WHERE " + whereClause,
+        "GROUP BY label",
+        "ORDER BY total DESC, label ASC"
+      ].join("\n");
+    });
+    var transactionTypes = mapBigQueryRows_(txResult.rows, function(values) {
+      return { label: String(values[0] || ""), value: Number(values[1] || 0) };
+    }).filter(function(row) { return row.label; });
+
+    // Location breakdown
+    var locResult = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT",
+        "  COALESCE(NULLIF(TRIM(currentLocation), ''), 'Unassigned') AS label,",
+        "  COUNT(*) AS total",
+        "FROM " + source,
+        "WHERE " + whereClause,
+        "GROUP BY label",
+        "ORDER BY total DESC, label ASC",
+        "LIMIT 8"
+      ].join("\n");
+    });
+    var locations = mapBigQueryRows_(locResult.rows, function(values) {
+      return { label: String(values[0] || ""), value: Number(values[1] || 0) };
+    }).filter(function(row) { return row.label; });
+
+    // Overall status summary
+    var statusResult = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT",
+        "  " + canonicalStatusExpression + " AS st,",
+        "  COUNT(*) AS total",
+        "FROM " + source,
+        "WHERE " + whereClause,
+        "GROUP BY st",
+        "ORDER BY total DESC"
+      ].join("\n");
+    });
+    var overallStatus = mapBigQueryRows_(statusResult.rows, function(values) {
+      return { label: String(values[0] || ""), value: Number(values[1] || 0) };
+    }).filter(function(row) { return row.label; });
+
+    // Build summary object for Executive Dashboard compatibility
+    var summary = {
+      totalCount: totalCount,
+      programCount: programs.length,
+      locationCount: locations.length,
+      statusTypeCount: overallStatus.length
+    };
+    
+    // Determine if this is a compact status modal (for status/location modals)
+    var compactStatusModal = normalizedKind === "Application Status" || normalizedKind === "status" || normalizedKind === "Location";
+    
+    var response = {
+      ok: true,
+      detail: {
+        kind: normalizedKind,
+        name: normalizedName,
+        page: currentPage,
+        pageSize: pageSizeValue,
+        totalCount: totalCount,
+        displayedRecordCount: records.length,
+        pageCount: totalPages,
+        compactStatusModal: compactStatusModal,
+        summary: summary,
+        rows: records,
+        // Executive Dashboard compatible naming
+        programRows: programs,
+        transactionRows: transactionTypes,
+        locationRows: locations,
+        overallStatusRows: overallStatus,
+        // Legacy naming for backward compatibility
+        programs: programs,
+        transactionTypes: transactionTypes,
+        locations: locations,
+        overallStatus: overallStatus
+      }
+    };
+
+    // Serialize to ensure clean object
+    try {
+      return JSON.parse(JSON.stringify(response));
+    } catch (e) {
+      return response;
+    }
+
+  } catch (error) {
+    Logger.log("[MODAL] Error fetching detail: " + error.toString());
+    return {
+      ok: false,
+      error: "Failed to load detail: " + (error.message || error.toString()),
+      detail: {
+        kind: normalizedKind,
+        name: normalizedName,
+        page: currentPage,
+        pageSize: pageSizeValue,
+        totalCount: 0,
+        pageCount: 1,
+        rows: [],
+        programs: [],
+        transactionTypes: [],
+        locations: [],
+        overallStatus: []
+      }
+    };
+  }
+}
+
+// ========== Executive Dashboard Migration: Reference Data & Advanced Functions ==========
+
+function readDashboardReferenceData_(diagnostics) {
+  var cachedReferenceData = getCachedDashboardReferenceData_();
+  if (cachedReferenceData) {
+    startTiming_(diagnostics, "referenceRead");
+    endTiming_(diagnostics, "referenceRead", {
+      cached: true,
+      staticRows: 0,
+      usersRows: 0,
+      dataTypesRows: 0
+    });
+    diagnostics.warnings = (cachedReferenceData.warnings || []).slice();
+    return cachedReferenceData;
+  }
+
+  startTiming_(diagnostics, "spreadsheetOpen");
+  var spreadsheet = SpreadsheetApp.openById(DASHBOARD_SPREADSHEET_ID);
+  var staticSheet = spreadsheet.getSheetByName(DASHBOARD_STATIC_SHEET);
+  var usersSheet = spreadsheet.getSheetByName(DASHBOARD_USERS_SHEET);
+  var dataTypesSheet = spreadsheet.getSheetByName(DASHBOARD_DATA_TYPES_SHEET);
+  endTiming_(diagnostics, "spreadsheetOpen", {
+    hasStaticSheet: !!staticSheet,
+    hasUsersSheet: !!usersSheet,
+    hasDataTypesSheet: !!dataTypesSheet
+  });
+
+  startTiming_(diagnostics, "referenceRead");
+  var staticData = readWholeSheet_(staticSheet);
+  var usersData = readWholeSheet_(usersSheet);
+  var dataTypesData = readWholeSheet_(dataTypesSheet);
+  var staticConfig = buildStaticConfig_(staticData);
+  var userDirectory = buildUserDirectory_(usersData);
+  var dataTypesConfig = buildDataTypesConfig_(dataTypesData);
+  var warnings = [];
+  if (!(staticConfig.applicationStatuses || []).length) warnings.push("Static application status list is empty or unavailable.");
+  if (!(staticConfig.es2Owners || []).length) warnings.push("Static ES II ownership list is empty or unavailable.");
+  if (!(userDirectory.names || []).length) warnings.push("Users sheet is empty or unavailable.");
+  endTiming_(diagnostics, "referenceRead", {
+    staticRows: Math.max(0, staticData.length - 1),
+    usersRows: Math.max(0, usersData.length - 1),
+    dataTypesRows: Math.max(0, dataTypesData.length - 1)
+  });
+
+  diagnostics.warnings = warnings.slice();
+  var referenceData = {
+    staticConfig: staticConfig,
+    userDirectory: userDirectory,
+    dataTypesConfig: dataTypesConfig,
+    warnings: warnings
+  };
+  cacheDashboardReferenceData_(referenceData);
+  return referenceData;
+}
+
+function getDashboardReferenceCacheKey_() {
+  return "dashboard:reference-data:v1";
+}
+
+function getCachedDashboardReferenceData_() {
+  var cache = CacheService.getScriptCache();
+  var cachedValue = cache.get(getDashboardReferenceCacheKey_());
+  if (!cachedValue) return null;
+  try {
+    return JSON.parse(cachedValue);
+  } catch (error) {
+    Logger.log("[REFERENCE CACHE] Parse failed: " + (error && error.message ? error.message : error));
+    return null;
+  }
+}
+
+function cacheDashboardReferenceData_(referenceData) {
+  var cache = CacheService.getScriptCache();
+  cache.put(getDashboardReferenceCacheKey_(), JSON.stringify(referenceData), DASHBOARD_REFERENCE_CACHE_TTL_SECONDS);
+}
+
+function buildStaticConfig_(staticData) {
+  var config = {
+    applicationStatuses: [],
+    es2Owners: [],
+    es2Programs: {},
+    programOwners: {}
+  };
+  if (!staticData || staticData.length < 2) return config;
+
+  var headers = staticData[0] || [];
+  var statusIndex = headers.indexOf("Application Status");
+  var es2Index = headers.indexOf("ES II Owner");
+  var programIndex = headers.indexOf("Program");
+
+  for (var i = 1; i < staticData.length; i++) {
+    var row = staticData[i];
+    if (statusIndex >= 0 && row[statusIndex]) config.applicationStatuses.push(String(row[statusIndex]).trim());
+    if (es2Index >= 0 && row[es2Index]) {
+      var es2Owner = String(row[es2Index]).trim();
+      config.es2Owners.push(es2Owner);
+      if (programIndex >= 0 && row[programIndex]) {
+        var program = String(row[programIndex]).trim();
+        config.es2Programs[program] = es2Owner;
+        config.programOwners[program] = es2Owner;
+      }
+    }
+  }
+
+  // Remove duplicates
+  config.applicationStatuses = config.applicationStatuses.filter(function(v, i, a) { return a.indexOf(v) === i; });
+  config.es2Owners = config.es2Owners.filter(function(v, i, a) { return a.indexOf(v) === i; });
+
+  return config;
+}
+
+function buildUserDirectory_(usersData) {
+  var directory = { names: [], emailMap: {} };
+  if (!usersData || usersData.length < 2) return directory;
+
+  var headers = usersData[0] || [];
+  var nameIndex = headers.indexOf("Name");
+  var emailIndex = headers.indexOf("Email");
+
+  for (var i = 1; i < usersData.length; i++) {
+    var row = usersData[i];
+    if (nameIndex >= 0 && row[nameIndex]) {
+      var name = String(row[nameIndex]).trim();
+      directory.names.push(name);
+      if (emailIndex >= 0 && row[emailIndex]) {
+        directory.emailMap[name] = String(row[emailIndex]).trim();
+      }
+    }
+  }
+
+  return directory;
+}
+
+function buildDataTypesConfig_(dataTypesData) {
+  var config = { transactionTypes: ["Walk-In", "Online"], aliasMap: {} };
+  if (!dataTypesData || dataTypesData.length < 2) return config;
+
+  var headers = dataTypesData[0] || [];
+  var typeIndex = headers.indexOf("Transaction Type");
+  var aliasIndex = headers.indexOf("Alias");
+
+  for (var i = 1; i < dataTypesData.length; i++) {
+    var row = dataTypesData[i];
+    if (typeIndex >= 0 && row[typeIndex]) {
+      var typeName = String(row[typeIndex]).trim();
+      if (config.transactionTypes.indexOf(typeName) === -1) {
+        config.transactionTypes.push(typeName);
+      }
+      if (aliasIndex >= 0 && row[aliasIndex]) {
+        config.aliasMap[String(row[aliasIndex]).trim().toLowerCase()] = typeName;
+      }
+    }
+  }
+
+  return config;
+}
+
+function readWholeSheet_(sheet) {
+  if (!sheet) return [];
+  var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
+  if (lastRow < 1 || lastCol < 1) return [];
+  return sheet.getRange(1, 1, lastRow, lastCol).getValues();
+}
+
+function safelyGetBigQueryTotalCount_(filters) {
+  try {
+    var result = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT COUNT(1) AS total",
+        "FROM " + source,
+        "WHERE " + buildDashboardWhereClause_(filters)
+      ].join("\n");
+    });
+    return result.rows && result.rows.length > 0 ? Number(result.rows[0].f[0].v || 0) : 0;
+  } catch (error) {
+    Logger.log("[SAFETY] Total count fallback: " + (error && error.message ? error.message : error));
+    return 0;
+  }
+}
+
+function safelyGetDashboardFilterOptions_(referenceData, filters) {
+  try {
+    return buildFilterOptionsFromReference_(referenceData, filters);
+  } catch (error) {
+    Logger.log("[SAFETY] Filter options fallback: " + (error && error.message ? error.message : error));
+    return {
+      programs: [],
+      es2Owners: [],
+      applicationStatuses: [],
+      transactionTypes: ["Walk-In", "Online"],
+      heis: [],
+      dateRange: { min: "", max: "" },
+      usersDirectory: []
+    };
+  }
+}
+
+function buildFilterOptionsFromReference_(referenceData, filters) {
+  var staticConfig = referenceData.staticConfig || {};
+  var userDirectory = referenceData.userDirectory || {};
+  var dataTypesConfig = referenceData.dataTypesConfig || {};
+
+  return {
+    programs: Object.keys(staticConfig.programOwners || {}).sort(),
+    es2Owners: (staticConfig.es2Owners || []).slice(),
+    applicationStatuses: (staticConfig.applicationStatuses || []).slice(),
+    transactionTypes: ["Walk-In", "Online"],
+    heis: [],
+    dateRange: { min: "", max: "" },
+    usersDirectory: (userDirectory.names || []).slice()
+  };
+}
+
+function buildFailureResponse_(error, diagnostics, mode) {
+  finalizeDiagnostics_(diagnostics, "error", { mode: mode, message: error && error.message ? error.message : String(error) });
+  Logger.log("[DASHBOARD ERROR] [" + diagnostics.requestId + "] " + (error && error.stack ? error.stack : error));
+
+  return {
+    ok: false,
+    filters: {
+      programs: [],
+      es2Owners: [],
+      applicationStatuses: [],
+      transactionTypes: ["Walk-In", "Online"],
+      heis: [],
+      dateRange: { min: "", max: "" },
+      usersDirectory: []
+    },
+    summary: {
+      totalRecords: 0,
+      total: 0,
+      forEvaluation: 0,
+      evaluated: 0,
+      deficiency: 0,
+      approved: 0,
+      verified: 0,
+      forSignature: 0,
+      forRelease: 0,
+      released: 0,
+      cancelled: 0
+    },
+    sections: {
+      es2Ownership: { title: "Workload by ES II Owner", rows: [] },
+      topPrograms: { title: "Top 10 Programs", rows: [] },
+      overallApplicationStatus: { title: "Overall Application Status", rows: [] },
+      statusProgression: { title: "Status Progression Overview", rows: [] },
+      turnaroundTime: { title: "Turnaround Time", rows: [] },
+      locationLoad: { title: "Document Location Load", rows: [] },
+      monthlyVolume: { title: "Monthly Application Volume", rows: [] },
+      slaExposure: { title: "SLA Exposure", rows: [] },
+      stageBacklog: { title: "Workflow Backlog", rows: [] },
+      productivity: { title: "Assigned Staff Activity", rows: [] }
+    },
+    meta: {
+      cachedAt: "",
+      requestId: diagnostics.requestId,
+      timings: diagnostics.timings,
+      cacheStatus: "error",
+      isPartial: false,
+      nextStartRow: 0,
+      recordCount: 0,
+      loadedRecordCount: 0,
+      totalRecordCount: 0,
+      sourceTotalRecordCount: 0,
+      appliedFilters: normalizeFilters_({}),
+      warnings: diagnostics.warnings || []
+    },
+    error: {
+      userMessage: "Dashboard loading failed.",
+      message: error && error.message ? error.message : String(error),
+      mode: mode,
+      requestId: diagnostics.requestId
+    }
+  };
+}
+
+function getBigQueryAvailableYears_() {
+  try {
+    var result = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT DISTINCT EXTRACT(YEAR FROM dateReceivedDate) AS year",
+        "FROM " + source,
+        "WHERE dateReceivedDate IS NOT NULL",
+        "ORDER BY year DESC"
+      ].join("\n");
+    });
+
+    var years = [];
+    if (result.rows) {
+      for (var i = 0; i < result.rows.length; i++) {
+        var year = Number(result.rows[i].f[0].v);
+        if (!isNaN(year)) years.push(year);
+      }
+    }
+    return years;
+  } catch (error) {
+    Logger.log("[AVAILABLE YEARS] Error: " + (error && error.message ? error.message : error));
+    return [];
+  }
+}
+
+function isBigQueryAvailable_() {
+  try {
+    return typeof BigQuery !== "undefined" && BigQuery && BigQuery.Jobs;
+  } catch (e) {
+    return false;
+  }
+}
+
+function typing_getInitialData_(batchSize) {
+  // Integration with Typing Records subsystem
+  return { data: [], total: 0, viewConfig: getCurrentRecordViewConfig_() };
+}
+
+function typing_loadRemainingData_(startRow, batchSize) {
+  return { data: [] };
+}
+
+function typing_searchExactName_(searchTerm) {
+  return [];
+}
+
+function typing_getTempRecordPrefill_(rowNumber, dateReceived) {
+  return null;
+}
+
+function typing_updateTempRecordEntries_(dataList, batchId) {
+  return { results: [] };
+}
+
+function typing_getSaveBatchProgress_(batchId) {
+  return null;
 }
 
 function buildTypingInsertContext_() {
@@ -2496,7 +4206,10 @@ function insertTypingStudentRow_(context, student) {
     };
   }
 
-  var row = new Array(context.headers.length).fill("");
+  var row = [];
+  for (var i = 0; i < context.headers.length; i++) {
+    row.push("");
+  }
   context.writableFieldKeys.forEach(function(fieldKey) {
     if (!Object.prototype.hasOwnProperty.call(context.columnIndexes, fieldKey)) return;
     row[context.columnIndexes[fieldKey]] = normalizedStudent[fieldKey];
@@ -2889,6 +4602,21 @@ function handleIssuanceRoute(action, payload) {
   }
 }
 
+function normalizeTypingRouteAction_(action) {
+  var raw = String(action || "").trim().toLowerCase();
+  var map = {
+    "createbatch": "createBatch",
+    "retryfailedrow": "retryFailedRow",
+    "getinitialdata": "getInitialData",
+    "loadremainingdata": "loadRemainingData",
+    "searchexactname": "searchExactName",
+    "gettemprecordprefill": "getTempRecordPrefill",
+    "updatetemprecordentries": "updateTempRecordEntries",
+    "getsavebatchprogress": "getSaveBatchProgress"
+  };
+  return map[raw] || raw;
+}
+
 function handleTypingRoute(action, payload) {
   var normalizedAction = normalizeTypingRouteAction_(action);
   Logger.log("Typing Action: " + normalizedAction);
@@ -2900,22 +4628,116 @@ function handleTypingRoute(action, payload) {
     case "retryFailedRow":
       return retryTypingFailedRow_(payload);
 
+    case "getInitialData":
+      return buildHandledRouteResponse_(typing_getInitialData_(payload.batchSize));
+
+    case "loadRemainingData":
+      return buildHandledRouteResponse_(typing_loadRemainingData_(payload.startRow, payload.batchSize));
+
+    case "searchExactName":
+      return buildHandledRouteResponse_(typing_searchExactName_(payload.searchTerm));
+
+    case "getTempRecordPrefill":
+      return buildHandledRouteResponse_(typing_getTempRecordPrefill_(payload.rowNumber, payload.dateReceived));
+
+    case "updateTempRecordEntries":
+      return buildHandledRouteResponse_(typing_updateTempRecordEntries_(payload.dataList, payload.batchId));
+
+    case "getSaveBatchProgress":
+      return buildHandledRouteResponse_(typing_getSaveBatchProgress_(payload.batchId));
+
     default:
       return buildUnhandledRouteResponse_("typing", normalizedAction || String(action || ""), "Unknown typing action.");
   }
 }
 
+function runBigQueryQuery_(query, queryParameters) {
+  var projectId = "sodium-shard-459702-t9";
+  var request = {
+    query: query,
+    useLegacySql: false,
+    parameterMode: 'NAMED',
+    queryParameters: queryParameters || []
+  };
+  try {
+    var queryResults = BigQuery.Jobs.query(request, projectId);
+    var jobId = queryResults.jobReference.jobId;
+
+    while (!queryResults.jobComplete) {
+      Utilities.sleep(500);
+      queryResults = BigQuery.Jobs.getQueryResults(projectId, jobId);
+    }
+
+    var rows = queryResults.rows;
+    while (queryResults.pageToken) {
+      queryResults = BigQuery.Jobs.getQueryResults(projectId, jobId, {
+        pageToken: queryResults.pageToken
+      });
+      rows = rows.concat(queryResults.rows);
+    }
+    return rows || [];
+  } catch (e) {
+    var msg = e.toString();
+    if (msg.indexOf("Not found") !== -1) throw "404: Analytics dataset not found.";
+    if (msg.indexOf("Access Denied") !== -1) throw "403: No BigQuery access.";
+    throw "BigQuery Error: " + msg;
+  }
+}
+
+function mapBigQueryRows_(rows, mapper) {
+  if (!rows || !rows.length) return [];
+  return rows.map(function(row) {
+    var values = row.f.map(function(field) {
+      return field.v;
+    });
+    return mapper(values);
+  });
+}
+
 function handleDashboardRoute(action, payload) {
-  var normalizedAction = String(action || "").trim().toLowerCase();
-  Logger.log("Dashboard Action: " + normalizedAction);
+  var rawAction = String(action || "").trim().toLowerCase();
+  var map = {
+    "fetch": "fetch",
+    "refresh": "refresh",
+    "getdashboarddata": "fetch",
+    "getanalyticsdata": "getAnalyticsData",
+    "refreshdashboardcache": "refreshDashboardCache",
+    "getnavbarlogodata": "getNavbarLogoData",
+    "getdashboarddetail": "getDashboardDetail"
+  };
+  var normalizedAction = map[rawAction] || rawAction;
+  Logger.log("[BACKEND] Dashboard Routing Action: " + normalizedAction);
 
   switch (normalizedAction) {
     case "fetch":
     case "refresh":
-      return buildHandledRouteResponse_(dashboard_fetchData_(payload || {}));
+    case "getDashboardData":
+      var data = dashboard_fetchData_(payload || {});
+      if (data && typeof data === 'object') {
+        data['ok'] = true;
+        var totalCount = data['summary'] ? data['summary']['totalCount'] : "N/A";
+        Logger.log("[BACKEND] Dashboard data fetched, total records: " + totalCount);
+      }
+      return data;
+
+    case "getAnalyticsData":
+      Logger.log("[ROUTE] getAnalyticsData payload: " + JSON.stringify(payload));
+      return dashboard_getAnalyticsData_(payload);
+
+    case "refreshDashboardCache":
+      return dashboard_refreshDashboardCache_();
+
+    case "getNavbarLogoData":
+      var logo = getNavbarLogoData();
+      Logger.log("[BACKEND] Logo data generated: " + (logo && logo.dataUrl ? "YES" : "NO"));
+      return logo;
+
+    case "getDashboardDetail":
+      return dashboard_getDashboardDetail_(payload.kind, payload.name, payload.filters, payload.page, payload.pageSize);
 
     default:
-      return buildUnhandledRouteResponse_("dashboard", normalizedAction || String(action || ""), "Unknown dashboard action.");
+      Logger.log("[BACKEND] UNKNOWN DASHBOARD ACTION: " + normalizedAction);
+      return { error: "Unknown dashboard action: " + normalizedAction };
   }
 }
 
@@ -2951,8 +4773,13 @@ function routeModule(module, action, payload) {
 
   if (normalizedModule === "dashboard") {
     var dashboardResult = handleDashboardRoute(normalizedAction, payload);
-    logRouteAudit_(normalizedModule, normalizedAction, dashboardResult && dashboardResult.handled);
-    return dashboardResult;
+    try {
+      var isHandled = !!(dashboardResult && (dashboardResult['handled'] || dashboardResult['ok']));
+      logRouteAudit_(normalizedModule, normalizedAction, isHandled);
+    } catch (logError) {
+      Logger.log("Audit log failed for dashboard: " + logError.toString());
+    }
+    return dashboardResult || { ok: false, error: "Dashboard engine returned null." };
   }
 
   var invalidResult = buildUnhandledRouteResponse_(normalizedModule, normalizedAction, "Invalid module.");

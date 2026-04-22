@@ -19,6 +19,12 @@ const DASHBOARD_SPREADSHEET_ID = spreadsheetID;
 const DASHBOARD_STATIC_SHEET = "Static";
 const DASHBOARD_USERS_SHEET = usersSheetName;
 const DASHBOARD_DATA_TYPES_SHEET = dataTypesSheetName;
+const DASHBOARD_REPORTING_FLAT_SHEET = "Reporting_Flat";
+const DASHBOARD_INITIAL_BATCH_SIZE = 1000;
+const DASHBOARD_FLAT_REBUILD_INTERVAL_MINUTES = 30;
+const DASHBOARD_FLAT_REBUILD_BATCH_SIZE = 2500;
+const DASHBOARD_FLAT_REBUILD_EXECUTION_BUDGET_MS = 240000;
+const DASHBOARD_FLAT_REBUILD_STATE_KEY = "dashboard_reporting_flat_rebuild_state";
 const DASHBOARD_REFERENCE_CACHE_TTL_SECONDS = 1800; // 30 minutes
 const DASHBOARD_SECTION_CACHE_TTL_SECONDS = 600; // 10 minutes
 const BIGQUERY_CACHE_VERSION = "v2";
@@ -34,6 +40,70 @@ const DASHBOARD_STATUS_ORDER = [
   "For Release",
   "Released",
   "Cancelled"
+];
+
+const DASHBOARD_REPORTING_FLAT_HEADERS = [
+  "_row",
+  "recordId",
+  "studentName",
+  "program",
+  "es2InCharge",
+  "es2InChargeRaw",
+  "applicationStatus",
+  "statusOfApplication",
+  "transactionType",
+  "hei",
+  "dateReceived",
+  "dateReceivedDate",
+  "targetReleaseDate",
+  "targetReleaseDateDate",
+  "evaluationStatus",
+  "evaluationAssignedPeopleText",
+  "evaluationDateReceived",
+  "evaluationDateAccomplished",
+  "verificationStatus",
+  "verificationDateReceived",
+  "verificationDateAccomplished",
+  "issuanceStatus",
+  "issuanceAssignedPeopleText",
+  "issuanceDateReceived",
+  "issuanceDateAccomplished",
+  "deficiencyStatus",
+  "deficiencyDateReceived",
+  "deficiencyDateAccomplished",
+  "signatureStatus",
+  "signatureAssignedPeopleText",
+  "signatureDateReceived",
+  "signatureDateAccomplished",
+  "releaseStatus",
+  "releaseAssignedPeopleText",
+  "releaseDateReceived",
+  "releaseDateAccomplished",
+  "currentLocation",
+  "canonicalStatus",
+  "verificationDateReceived",
+  "verificationDateReceivedDate",
+  "issuanceDateReceived",
+  "issuanceDateReceivedDate",
+  "deficiencyDateReceived",
+  "deficiencyDateReceivedDate",
+  "releaseDateReceived",
+  "releaseDateReceivedDate",
+  "verificationDateAccomplished",
+  "verificationDateAccomplishedDate",
+  "issuanceDateAccomplished",
+  "issuanceDateAccomplishedDate",
+  "deficiencyDateAccomplished",
+  "deficiencyDateAccomplishedDate",
+  "signatureDateAccomplished",
+  "signatureDateAccomplishedDate",
+  "releaseDateAccomplished",
+  "releaseDateAccomplishedDate",
+  "hasPicture",
+  "lastName",
+  "firstName",
+  "middleName",
+  "suffix"
 ];
 
 const columnsToShow = [
@@ -980,6 +1050,30 @@ function getCurrentUserDebugInfo() {
           : ""
   };
 }
+
+// Time-driven trigger function to refresh cache
+function refreshDashboardCache() {
+  Logger.log("[CACHE_REFRESH] Starting scheduled cache refresh");
+  try {
+    // Fetch dashboard data with default filters
+    var payload = { datePreset: "thisYear" };
+    var data = dashboard_fetchData_(payload);
+    if (data && data.ok) {
+      // Store in both cache layers
+      setDashboardPropertiesCache_(data);
+      var cacheKey = getDashboardCacheKey_(payload);
+      setCachedDashboardData_(cacheKey, data);
+      Logger.log("[CACHE_REFRESH] Successfully refreshed dashboard cache");
+      return true;
+    }
+    Logger.log("[CACHE_REFRESH] Failed to fetch dashboard data");
+    return false;
+  } catch (e) {
+    Logger.log("[CACHE_REFRESH] Error: " + e.toString());
+    return false;
+  }
+}
+
 
 function getUserPositionFieldSchema() {
   return getFieldSchemaForCurrentUser_();
@@ -2362,6 +2456,10 @@ function normalizeFilterValue_(value) {
   return trimmed;
 }
 
+function normalizeToken_(value) {
+  return toTrimmedString_(value).toLowerCase().replace(/\s+/g, " ");
+}
+
 function normalizeDatePresetValue_(value) {
   var preset = toTrimmedString_(value) || "allTime";
   var validPresets = ["allTime", "thisYear", "yearToDate", "last30Days", "last90Days", "specificDate"];
@@ -2469,6 +2567,99 @@ function mapBigQueryRows_(rows, mapper) {
   });
 }
 
+function buildBigQueryNamedParameter_(name, type, value) {
+  var param = {
+    name: name,
+    parameterType: { type: type }
+  };
+  if (type === "DATE") {
+    param.parameterValue = { value: value };
+  } else if (type === "INT64" || type === "INTEGER") {
+    param.parameterValue = { value: String(value) };
+  } else if (type === "FLOAT" || type === "DOUBLE") {
+    param.parameterValue = { value: String(value) };
+  } else if (type === "BOOL" || type === "BOOLEAN") {
+    param.parameterValue = { value: value ? "true" : "false" };
+  } else {
+    param.parameterValue = { value: String(value || "") };
+  }
+  return param;
+}
+
+function buildBigQueryWhereClause_(filters, options) {
+  var config = options || {};
+  var excludedFilters = {};
+  var excludeFiltersArray = config.excludeFilters || [];
+  for (var i = 0; i < excludeFiltersArray.length; i++) {
+    excludedFilters[String(excludeFiltersArray[i] || "")] = true;
+  }
+
+  var normalizedFilters = normalizeFilters_(filters || {});
+  var queryParts = ["WHERE 1=1"];
+  var queryParameters = [];
+  var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
+
+  if (!excludedFilters.program && normalizedFilters.program) {
+    queryParts.push("AND program = @program");
+    queryParameters.push(buildBigQueryNamedParameter_("program", "STRING", normalizedFilters.program));
+  }
+  if (!excludedFilters.es2InCharge && normalizedFilters.es2InCharge) {
+    queryParts.push("AND es2InCharge = @es2InCharge");
+    queryParameters.push(buildBigQueryNamedParameter_("es2InCharge", "STRING", normalizedFilters.es2InCharge));
+  }
+  if (!excludedFilters.applicationStatus && normalizedFilters.applicationStatus) {
+    var canonicalStatus = normalizeDashboardStatus_(normalizedFilters.applicationStatus) || normalizedFilters.applicationStatus;
+    queryParts.push("AND (" + canonicalStatusExpression + ") = @canonicalStatus");
+    queryParameters.push(buildBigQueryNamedParameter_("canonicalStatus", "STRING", canonicalStatus));
+  }
+  if (!excludedFilters.transactionType && normalizedFilters.transactionType) {
+    queryParts.push("AND transactionType = @transactionType");
+    queryParameters.push(buildBigQueryNamedParameter_("transactionType", "STRING", normalizedFilters.transactionType));
+  }
+  if (!excludedFilters.hei && normalizedFilters.hei) {
+    queryParts.push("AND hei = @hei");
+    queryParameters.push(buildBigQueryNamedParameter_("hei", "STRING", normalizedFilters.hei));
+  }
+  if (!excludedFilters.dateFrom && normalizedFilters.dateFrom) {
+    queryParts.push("AND dateReceivedDate >= @dateFrom");
+    queryParameters.push(buildBigQueryNamedParameter_("dateFrom", "DATE", normalizedFilters.dateFrom));
+  }
+  if (!excludedFilters.dateTo && normalizedFilters.dateTo) {
+    queryParts.push("AND dateReceivedDate <= @dateTo");
+    queryParameters.push(buildBigQueryNamedParameter_("dateTo", "DATE", normalizedFilters.dateTo));
+  }
+
+  return {
+    whereClause: queryParts.join(" "),
+    queryParameters: queryParameters,
+    normalizedFilters: normalizedFilters
+  };
+}
+
+function runFilteredReportingQuery_(filters, queryFactory, options) {
+  var filterSpec = buildBigQueryWhereClause_(filters, options);
+  var result = runBigQueryOverReportingSources_(function(source) {
+    return queryFactory(source, filterSpec);
+  }, filterSpec.queryParameters);
+  return {
+    result: result,
+    filterSpec: filterSpec
+  };
+}
+
+function runBigQueryOverReportingSources_(queryFactory, queryParameters) {
+  var source = BIGQUERY_NATIVE_REPORTING_VIEW;
+  try {
+    return {
+      source: source,
+      rows: runBigQueryQuery_(queryFactory(source), queryParameters || [])
+    };
+  } catch (error) {
+    Logger.log("[DASHBOARD QUERY ERROR] Failed to query " + source + ": " + error.toString());
+    throw new Error("Unable to query dashboard source: " + error.message);
+  }
+}
+
 function runDashboardBigQueryOverSources_(queryFactory) {
   // Use only the native reporting view (matches Executive Dashboard)
   // The database_flat table doesn't have dateReceivedDate as a proper DATE column
@@ -2527,51 +2718,40 @@ function getDashboardPresetAnchorDate_() {
   return Utilities.formatDate(new Date(), "GMT", "yyyy-MM-dd");
 }
 
-function buildDashboardWhereClause_(filters) {
-  var clauses = ["1=1"];
-  
-  Logger.log("[WHERE] Building WHERE clause with filters: " + JSON.stringify(filters));
-  
-  // Use normalized filter values (empty string means "ALL")
-  // Match Executive Dashboard: use direct column comparison without CAST
-  if (filters.es2InCharge) {
-    clauses.push("es2InCharge = '" + filters.es2InCharge + "'");
-    Logger.log("[WHERE] Added ES2 filter: " + filters.es2InCharge);
+function buildDashboardWhereClause_(filters, options) {
+  // New parameterized version with backward compatibility and filter exclusions
+  var filterSpec = buildBigQueryWhereClause_(filters, options);
+  // For backward compatibility, convert "WHERE 1=1 AND x = @x" to "1=1 AND x = 'value'"
+  // This maintains compatibility with existing query functions that expect string interpolation
+  var normalizedFilters = filterSpec.normalizedFilters;
+  var clause = filterSpec.whereClause;
+
+  // Replace named parameters with actual values for backward compatibility
+  if (normalizedFilters.program) {
+    clause = clause.replace("@program", "'" + normalizedFilters.program.replace(/'/g, "\\'") + "'");
   }
-  if (filters.program) {
-    clauses.push("program = '" + filters.program + "'");
-    Logger.log("[WHERE] Added Program filter: " + filters.program);
+  if (normalizedFilters.es2InCharge) {
+    clause = clause.replace("@es2InCharge", "'" + normalizedFilters.es2InCharge.replace(/'/g, "\\'") + "'");
   }
-  if (filters.applicationStatus) {
-    // Use canonical status expression for status filtering
-    var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
-    clauses.push("(" + canonicalStatusExpression + ") = '" + filters.applicationStatus + "'");
-    Logger.log("[WHERE] Added Status filter: " + filters.applicationStatus);
+  if (normalizedFilters.applicationStatus) {
+    var status = normalizeDashboardStatus_(normalizedFilters.applicationStatus) || normalizedFilters.applicationStatus;
+    clause = clause.replace("@canonicalStatus", "'" + status.replace(/'/g, "\\'") + "'");
   }
-  if (filters.transactionType) {
-    clauses.push("transactionType = '" + filters.transactionType + "'");
-    Logger.log("[WHERE] Added Transaction Type filter: " + filters.transactionType);
+  if (normalizedFilters.transactionType) {
+    clause = clause.replace("@transactionType", "'" + normalizedFilters.transactionType.replace(/'/g, "\\'") + "'");
   }
-  if (filters.hei) {
-    clauses.push("hei = '" + filters.hei + "'");
-    Logger.log("[WHERE] Added HEI filter: " + filters.hei);
+  if (normalizedFilters.hei) {
+    clause = clause.replace("@hei", "'" + normalizedFilters.hei.replace(/'/g, "\\'") + "'");
   }
-  
-  // Use normalized dateFrom/dateTo (already resolved by normalizeFilters_)
-  var dateExpression = "dateReceivedDate";
-  
-  if (filters.dateFrom) {
-    clauses.push(dateExpression + " >= DATE('" + filters.dateFrom + "')");
-    Logger.log("[WHERE] Added dateFrom: " + filters.dateFrom);
+  if (normalizedFilters.dateFrom) {
+    clause = clause.replace("@dateFrom", "DATE('" + normalizedFilters.dateFrom + "')");
   }
-  if (filters.dateTo) {
-    clauses.push(dateExpression + " <= DATE('" + filters.dateTo + "')");
-    Logger.log("[WHERE] Added dateTo: " + filters.dateTo);
+  if (normalizedFilters.dateTo) {
+    clause = clause.replace("@dateTo", "DATE('" + normalizedFilters.dateTo + "')");
   }
-  
-  var whereClause = clauses.join(" AND ");
-  Logger.log("[WHERE] Final WHERE clause: " + whereClause);
-  return whereClause;
+
+  // Remove "WHERE " prefix to maintain backward compatibility with existing code
+  return clause.replace(/^WHERE /, "");
 }
 
 function getDashboardSummary_(filters) {
@@ -3292,7 +3472,7 @@ function getDashboardTurnaroundSource_() {
 }
 
 // Dashboard cache constants
-var DASHBOARD_CACHE_TTL_SECONDS = 300; // 5 minutes
+var DASHBOARD_CACHE_TTL_SECONDS = 120; // 2 minutes - fresher data
 var DASHBOARD_CACHE_KEY_PREFIX = "dashboard:v1:";
 
 function getDashboardCacheKey_(filters) {
@@ -3316,12 +3496,15 @@ function getCachedDashboardData_(cacheKey) {
     var cached = cache.get(cacheKey);
     if (cached) {
       Logger.log("[CACHE] Cache HIT for key: " + cacheKey);
+      console.info("[CACHE] Cache HIT for key: " + cacheKey)
       return JSON.parse(cached);
     }
     Logger.log("[CACHE] Cache MISS for key: " + cacheKey);
+    console.info("[CACHE] Cache MISS for key: " + cacheKey);
     return null;
   } catch (e) {
     Logger.log("[CACHE] Error reading cache: " + e.toString());
+    console.info("[CACHE] Error reading cache: " + e.toString());
     return null;
   }
 }
@@ -3357,6 +3540,176 @@ function clearDashboardCache_() {
   }
 }
 
+// PropertiesService Cache (500KB limit - 5x larger than CacheService)
+var DASHBOARD_PROPERTIES_CACHE_KEY = "dashboard:v1:data";
+var DASHBOARD_PROPERTIES_TIMESTAMP_KEY = "dashboard:v1:timestamp";
+var DASHBOARD_PROPERTIES_CACHE_MAX_AGE_MS = 2 * 60 * 1000; // 2 minutes - fresher data
+
+function compressDashboardData_(data) {
+  // Remove empty arrays and redundant fields to reduce size
+  return JSON.stringify(data, function(key, value) {
+    if (Array.isArray(value) && value.length === 0) return undefined;
+    if (value === null) return undefined;
+    if (value === "") return undefined;
+    // Remove internal meta fields that can be regenerated
+    if (key === "loadedAt") return undefined;
+    return value;
+  });
+}
+
+function decompressDashboardData_(compressed) {
+  return JSON.parse(compressed);
+}
+
+function setDashboardPropertiesCache_(data) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var compressed = compressDashboardData_(data);
+    var size = compressed.length;
+    // PropertiesService has 500KB limit per key
+    if (size > 450000) {
+      Logger.log("[PROPERTIES_CACHE] Data too large (>450KB), skipping cache write. Size: " + size);
+      return false;
+    }
+    props.setProperty(DASHBOARD_PROPERTIES_CACHE_KEY, compressed);
+    props.setProperty(DASHBOARD_PROPERTIES_TIMESTAMP_KEY, String(Date.now()));
+    Logger.log("[PROPERTIES_CACHE] Stored " + size + " bytes (TTL: " + (DASHBOARD_PROPERTIES_CACHE_MAX_AGE_MS / 60000) + " min)");
+    return true;
+  } catch (e) {
+    Logger.log("[PROPERTIES_CACHE] Error writing cache: " + e.toString());
+    return false;
+  }
+}
+
+function getDashboardPropertiesCache_() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var compressed = props.getProperty(DASHBOARD_PROPERTIES_CACHE_KEY);
+    var timestamp = props.getProperty(DASHBOARD_PROPERTIES_TIMESTAMP_KEY);
+    if (!compressed || !timestamp) {
+      Logger.log("[PROPERTIES_CACHE] Cache MISS");
+      return null;
+    }
+    var age = Date.now() - Number(timestamp);
+    if (age > DASHBOARD_PROPERTIES_CACHE_MAX_AGE_MS) {
+      Logger.log("[PROPERTIES_CACHE] Cache EXPIRED (age: " + (age / 1000) + "s)");
+      return null;
+    }
+    var data = decompressDashboardData_(compressed);
+    Logger.log("[PROPERTIES_CACHE] Cache HIT (age: " + (age / 1000) + "s, size: " + compressed.length + " bytes)");
+    return data;
+  } catch (e) {
+    Logger.log("[PROPERTIES_CACHE] Error reading cache: " + e.toString());
+    return null;
+  }
+}
+
+function clearDashboardPropertiesCache_() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    props.deleteProperty(DASHBOARD_PROPERTIES_CACHE_KEY);
+    props.deleteProperty(DASHBOARD_PROPERTIES_TIMESTAMP_KEY);
+    Logger.log("[PROPERTIES_CACHE] Cleared");
+    return true;
+  } catch (e) {
+    Logger.log("[PROPERTIES_CACHE] Error clearing cache: " + e.toString());
+    return false;
+  }
+}
+
+function testCacheLimits_() {
+  var cache = CacheService.getScriptCache();
+  var results = [];
+  
+  // Test 1: Cache size limits
+  var testSizes = [10000, 50000, 90000, 95000, 100000, 150000];
+  testSizes.forEach(function(size) {
+    try {
+      var testData = { records: new Array(Math.floor(size / 50)).join("x"), timestamp: new Date().toISOString() };
+      var serialized = JSON.stringify(testData);
+      var key = "test:size" + size;
+      cache.put(key, serialized, 60);
+      var retrieved = cache.get(key);
+      var success = retrieved === serialized;
+      results.push("Size " + size + " bytes: " + (success ? "PASS" : "FAIL") + " (actual: " + serialized.length + ")");
+    } catch (e) {
+      results.push("Size " + size + " bytes: ERROR - " + e.message);
+    }
+  });
+  
+  // Test 2: Cache performance
+  var iterations = 100;
+  var start = Date.now();
+  for (var i = 0; i < iterations; i++) {
+    var testKey = "perf:test" + (i % 10);
+    cache.put(testKey, JSON.stringify({ index: i, data: "test" }), 60);
+    cache.get(testKey);
+  }
+  var duration = Date.now() - start;
+  results.push("Performance: " + iterations + " ops in " + duration + "ms (" + (duration / iterations).toFixed(2) + "ms/op)");
+  
+  // Test 3: Dashboard data caching
+  var mockDashboardData = {
+    ok: true,
+    filters: { programs: [], es2Owners: [] },
+    data: { records: [], availableYears: [], es2Owners: [], es2ProgramMap: {}, programOwnershipMap: {} },
+    summary: { total: 100, forEvaluation: 20, evaluated: 30 },
+    sections: {
+      summary: { rows: [] },
+      es2Ownership: { rows: (function() { var arr = []; for (var i = 0; i < 20; i++) arr.push({ es2: "Test", totalApplications: 50 }); return arr; })() },
+      monthlyVolume: { rows: (function() { var arr = []; for (var i = 0; i < 24; i++) arr.push({ label: "Jan 2024", value: 100 }); return arr; })() },
+      locationLoad: { rows: (function() { var arr = []; for (var i = 0; i < 10; i++) arr.push({ label: "Location", value: 50 }); return arr; })() },
+      stageBacklog: { rows: [] },
+      slaExposure: { rows: [] },
+      turnaroundTime: { rows: [], summary: {} },
+      productivity: { rows: (function() { var arr = []; for (var i = 0; i < 50; i++) arr.push({ person: "Staff", completed: 10, pending: 5 }); return arr; })() }
+    },
+    referenceData: { es2Owners: [], es2ProgramMap: {}, programOwnershipMap: {} },
+    meta: { loadedAt: new Date().toISOString(), recordCount: 100, totalRecordCount: 100, availableYears: [] }
+  };
+  
+  var dashboardSerialized = JSON.stringify(mockDashboardData);
+  results.push("Mock dashboard data size: " + dashboardSerialized.length + " bytes");
+  
+  if (dashboardSerialized.length <= 90000) {
+    try {
+      var cacheKey = "test:dashboard";
+      cache.put(cacheKey, dashboardSerialized, 60);
+      var retrieved = cache.get(cacheKey);
+      results.push("CacheService (100KB) test: " + (retrieved === dashboardSerialized ? "PASS" : "FAIL"));
+    } catch (e) {
+      results.push("CacheService (100KB) test: ERROR - " + e.message);
+    }
+  } else {
+    results.push("CacheService (100KB) test: SKIPPED (too large)");
+  }
+  
+  // Test 4: PropertiesService (500KB limit)
+  if (dashboardSerialized.length <= 450000) {
+    try {
+      var props = PropertiesService.getScriptProperties();
+      props.setProperty("test:dashboard", dashboardSerialized);
+      props.setProperty("test:timestamp", String(Date.now()));
+      var propRetrieved = props.getProperty("test:dashboard");
+      results.push("PropertiesService (500KB) test: " + (propRetrieved === dashboardSerialized ? "PASS" : "FAIL") + " (size: " + dashboardSerialized.length + " bytes)");
+      // Cleanup
+      props.deleteProperty("test:dashboard");
+      props.deleteProperty("test:timestamp");
+    } catch (e) {
+      results.push("PropertiesService (500KB) test: ERROR - " + e.message);
+    }
+  } else {
+    results.push("PropertiesService (500KB) test: SKIPPED (too large)");
+  }
+  
+  // Test 5: Compression efficiency
+  var compressed = compressDashboardData_(mockDashboardData);
+  results.push("Compression efficiency: " + dashboardSerialized.length + " -> " + compressed.length + " bytes (" + (100 - (compressed.length / dashboardSerialized.length * 100)).toFixed(1) + "% reduction)");
+  
+  Logger.log("[CACHE TEST]\n" + results.join("\n"));
+  return results;
+}
+
 function dashboard_fetchData_(payload) {
   var rawFilters = payload || {};
   
@@ -3368,15 +3721,35 @@ function dashboard_fetchData_(payload) {
   Logger.log("[FETCH] Normalized filters: " + JSON.stringify(filters));
   Logger.log("[FETCH] es2InCharge value: '" + filters.es2InCharge + "' (length: " + (filters.es2InCharge ? filters.es2InCharge.length : 0) + ")");
   
+  // Check for live mode (bypass all caches)
+  var liveMode = rawFilters._liveMode === true;
+  if (liveMode) {
+    Logger.log("[FETCH] Live mode enabled - bypassing all caches");
+  }
+  
   // Check cache first (use normalized filters for cache key)
   var cacheKey = getDashboardCacheKey_(filters);
   Logger.log("[FETCH] Cache key: " + cacheKey);
   
-  var cachedData = getCachedDashboardData_(cacheKey);
-  if (cachedData && cachedData.ok) {
-    Logger.log("[FETCH] Returning cached data for key: " + cacheKey);
-    return cachedData;
+  // Check CacheService first (fastest, 100KB limit) - skip if live mode
+  if (!liveMode) {
+    var cachedData = getCachedDashboardData_(cacheKey);
+    if (cachedData && cachedData.ok) {
+      Logger.log("[FETCH] Returning cached data from CacheService for key: " + cacheKey);
+      return cachedData;
+    }
   }
+  
+  // Check PropertiesService for default filter (thisYear) - stores up to 500KB - skip if live mode
+  if (!liveMode && filters.datePreset === "thisYear" && !filters.program && !filters.es2InCharge && 
+      !filters.applicationStatus && !filters.transactionType && !filters.hei) {
+    var propertiesCachedData = getDashboardPropertiesCache_();
+    if (propertiesCachedData && propertiesCachedData.ok) {
+      Logger.log("[FETCH] Returning cached data from PropertiesService (default filters)");
+      return propertiesCachedData;
+    }
+  }
+  
   Logger.log("[FETCH] Cache miss for key: " + cacheKey);
   
   var summary, workload, status, turnaround, topPrograms, locationLoad, monthlyVolume, slaExposure, stageBacklog, productivity;
@@ -3411,7 +3784,10 @@ function dashboard_fetchData_(payload) {
     filters: filterOptions,
     data: {
       records: [],
-      availableYears: availableYears || []
+      availableYears: availableYears || [],
+      es2Owners: (filterOptions && filterOptions.es2Owners) || [],
+      es2ProgramMap: (filterOptions && filterOptions.es2ProgramMap) || {},
+      programOwnershipMap: (filterOptions && filterOptions.programOwnershipMap) || {}
     },
     summary: {
       totalRecords: Number((summary && summary.values && summary.values.totalCount) || 0),
@@ -3439,7 +3815,10 @@ function dashboard_fetchData_(payload) {
       productivity: { title: "Assigned Staff Activity", rows: (productivity && productivity.rows) || [] }
     },
     referenceData: {
-      availableYears: availableYears || []
+      availableYears: availableYears || [],
+      es2Owners: (filterOptions && filterOptions.es2Owners) || [],
+      es2ProgramMap: (filterOptions && filterOptions.es2ProgramMap) || {},
+      programOwnershipMap: (filterOptions && filterOptions.programOwnershipMap) || {}
     },
     meta: {
       source: (summary && summary.source) || (workload && workload.source) || "",
@@ -3453,10 +3832,20 @@ function dashboard_fetchData_(payload) {
   };
   
   Logger.log("[FETCH] Summary total: " + (summary && summary.values && summary.values.totalCount) + ", Filtered es2InCharge: " + filters.es2InCharge);
-  Logger.log("[FETCH] Storing in cache with key: " + cacheKey);
   
-  // Store in cache for subsequent requests
-  setCachedDashboardData_(cacheKey, response);
+  // Store in cache for subsequent requests (skip if live mode)
+  if (!liveMode) {
+    Logger.log("[FETCH] Storing in cache with key: " + cacheKey);
+    setCachedDashboardData_(cacheKey, response);
+    
+    // Store in PropertiesService for default filters (supports up to 500KB)
+    if (filters.datePreset === "thisYear" && !filters.program && !filters.es2InCharge && 
+        !filters.applicationStatus && !filters.transactionType && !filters.hei) {
+      setDashboardPropertiesCache_(response);
+    }
+  } else {
+    Logger.log("[FETCH] Live mode - skipping cache storage");
+  }
   
   // FINAL HARDENING: Ensure the object is clean and serializable for the GAS bridge
   try {
@@ -3490,7 +3879,7 @@ function getDashboardFilterOptionsFromBigQuery_() {
     var es2Owners = mapBigQueryRows_(es2Result.rows, function(values) {
       return String(values[0] || "");
     }).filter(function(v) { return v !== ""; });
-    
+
     // Get distinct Programs (without CAST)
     var programResult = runDashboardBigQueryOverSources_(function(source) {
       return [
@@ -3503,7 +3892,7 @@ function getDashboardFilterOptionsFromBigQuery_() {
     var programs = mapBigQueryRows_(programResult.rows, function(values) {
       return String(values[0] || "");
     }).filter(function(v) { return v !== ""; });
-    
+
     // Get distinct Application Statuses (without CAST)
     var statusResult = runDashboardBigQueryOverSources_(function(source) {
       return [
@@ -3516,16 +3905,40 @@ function getDashboardFilterOptionsFromBigQuery_() {
     var applicationStatuses = mapBigQueryRows_(statusResult.rows, function(values) {
       return String(values[0] || "");
     }).filter(function(v) { return v !== ""; });
-    
-    Logger.log("[FILTER_OPTIONS] Loaded from BigQuery: " + es2Owners.length + " ES2, " + programs.length + " Programs, " + applicationStatuses.length + " Statuses");
-    
+
+    // Get Program-ES2 Ownership mapping for cascading filters
+    var ownershipResult = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT DISTINCT program, es2InCharge",
+        "FROM " + source,
+        "WHERE program IS NOT NULL AND es2InCharge IS NOT NULL",
+        "ORDER BY program, es2InCharge"
+      ].join("\n");
+    });
+    var programOwnershipMap = {};
+    var es2ProgramMap = {};
+    mapBigQueryRows_(ownershipResult.rows, function(values) {
+      var program = String(values[0] || "").trim();
+      var es2 = String(values[1] || "").trim();
+      if (program && es2) {
+        programOwnershipMap[program] = es2;
+        if (!es2ProgramMap[es2]) es2ProgramMap[es2] = [];
+        es2ProgramMap[es2].push(program);
+      }
+      return null;
+    });
+
+    Logger.log("[FILTER_OPTIONS] Loaded from BigQuery: " + es2Owners.length + " ES2, " + programs.length + " Programs, " + applicationStatuses.length + " Statuses, " + Object.keys(programOwnershipMap).length + " ownership mappings");
+
     return {
       es2Owners: es2Owners,
       programs: programs,
       applicationStatuses: applicationStatuses,
       transactionTypes: ["Walk-In", "Online"],
       heis: [],
-      dateRange: { min: "", max: "" }
+      dateRange: { min: "", max: "" },
+      programOwnershipMap: programOwnershipMap,
+      es2ProgramMap: es2ProgramMap
     };
   } catch (e) {
     Logger.log("[FILTER_OPTIONS] ERROR loading from BigQuery: " + e.toString());
@@ -3536,7 +3949,9 @@ function getDashboardFilterOptionsFromBigQuery_() {
       applicationStatuses: DASHBOARD_STATUS_ORDER || [],
       transactionTypes: ["Walk-In", "Online"],
       heis: [],
-      dateRange: { min: "", max: "" }
+      dateRange: { min: "", max: "" },
+      programOwnershipMap: {},
+      es2ProgramMap: {}
     };
   }
 }
@@ -5208,3 +5623,522 @@ function getUserModuleAccess() {
 
 
 //
+// ========== Reporting_Flat Constants and Helpers (Ported from Executive Dashboard) ==========
+
+const FIELD_ALIASES = {
+  recordId: ["ID", "Id"],
+  studentName: ["Name", "Student Name", "Name of Student", "Applicant Name", "Full Name", "Name of Applicant", "Student/Applicant Name", "Name of the Student", "Student's Name"],
+  firstName: ["First Name", "Firstname", "Given Name"],
+  middleName: ["Middle Name", "Middlename", "Middle Initial"],
+  lastName: ["Last Name", "Lastname", "Surname", "Family Name"],
+  program: ["Program"],
+  es2InCharge: ["ES II In-charge of the Program", "ES II In-charge", "ES II In Charge", "ES II"],
+  applicationStatus: ["Application Status", "Status of the Application"],
+  statusOfApplication: ["Status of the Application", "Application Status"],
+  evaluationStatus: ["Evaluation Status"],
+  verificationStatus: ["Verification Status"],
+  issuanceStatus: ["Issuance and Encoding Status", "Issuance and Encoding of No.: Status"],
+  deficiencyStatus: ["Encoding of Deficiency Status", "Encoding of Deficiency: Status"],
+  signatureStatus: ["RD/CAO Signature Status", "RD/CAO Signature: Status"],
+  releaseStatus: ["Release Status"],
+  dateReceived: ["Date Received"],
+  verificationDateReceived: ["Verification: Date Received"],
+  issuanceDateReceived: ["Issuance and Encoding of No.: Date Received"],
+  deficiencyDateReceived: ["Encoding of Deficiency: Date Received"],
+  releaseDateReceived: ["Release: Date Received"],
+  targetReleaseDate: ["Target Release Date"],
+  transactionType: ["Transaction Type"],
+  hei: ["HEI"],
+  currentLocation: ["Current Location of the Document"],
+  assignedPerson: ["Assigned Person", "Assigned Person fields"],
+  verificationAssignedPerson: ["Verification Assigned Person", "Verification: Assigned Person"],
+  issuanceAssignedPerson: ["Issuance Assigned Person", "Issuance and Encoding Assigned Person", "Issuance and Encoding of No.: Assigned Person"],
+  signatureAssignedPerson: ["RD/CAO Signature Assigned Person", "RD/CAO Signature: Assigned Person", "Signature Assigned Person"],
+  releaseAssignedPerson: ["Release Assigned Person", "Release: Assigned Person"]
+};
+
+const STAGE_DEFINITIONS = [
+  { key: "evaluation", label: "Evaluation", statusField: "evaluationStatus" },
+  { key: "verification", label: "Verification", statusField: "verificationStatus" },
+  { key: "issuance", label: "Issuance", statusField: "issuanceStatus" },
+  { key: "deficiency", label: "Encoding of Deficiency", statusField: "deficiencyStatus" },
+  { key: "signature", label: "RD/CAO Signature", statusField: "signatureStatus" },
+  { key: "release", label: "Release", statusField: "releaseStatus" }
+];
+
+const USER_NAME_ALIASES = ["Name", "Full Name", "User Name", "Display Name"];
+const STATIC_STATUS_ALIASES = ["Status of Application", "Application Status"];
+
+// Helper functions with underscore suffix
+function toTrimmedString_(value) {
+  return value == null ? "" : String(value).trim();
+}
+
+function toCanonicalKey_(value) {
+  return toTrimmedString_(value).toLowerCase();
+}
+
+function buildHeaderMap_(headers) {
+  const map = {};
+  headers.forEach(function(header, index) {
+    map[toCanonicalKey_(header)] = index;
+  });
+  return map;
+}
+
+function resolveHeaderIndex_(headerMap, aliases) {
+  for (var i = 0; i < aliases.length; i += 1) {
+    const key = toCanonicalKey_(aliases[i]);
+    if (Object.prototype.hasOwnProperty.call(headerMap, key)) return headerMap[key];
+  }
+  return -1;
+}
+
+function buildFieldIndexMap_(headerMap) {
+  const result = {};
+  Object.keys(FIELD_ALIASES).forEach(function(fieldName) {
+    result[fieldName] = resolveHeaderIndex_(headerMap, FIELD_ALIASES[fieldName]);
+  });
+  return result;
+}
+
+function getValueAtIndex_(row, index) {
+  return index >= 0 && index < row.length ? toTrimmedString_(row[index]) : "";
+}
+
+function getValueAtField_(row, index) {
+  return index === -1 ? "" : getValueAtIndex_(row, index);
+}
+
+function normalizeToken_(value) {
+  return toTrimmedString_(value).toLowerCase().replace(/\s+/g, " ");
+}
+
+function readWholeSheet_(sheet) {
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  if (lastRow === 0 || lastColumn === 0) return [];
+  return sheet.getRange(1, 1, lastRow, lastColumn).getValues();
+}
+
+function buildStaticConfig_(staticData) {
+  const config = {
+    programOwners: {},
+    applicationStatuses: [],
+    es2Programs: {},
+    es2Owners: []
+  };
+  if (!staticData || staticData.length < 2) return config;
+  const headers = staticData[0].map(toTrimmedString_);
+  const headerMap = buildHeaderMap_(headers);
+  const programIndex = resolveHeaderIndex_(headerMap, FIELD_ALIASES.program);
+  const es2Index = resolveHeaderIndex_(headerMap, FIELD_ALIASES.es2InCharge);
+  if (programIndex !== -1 && es2Index !== -1) {
+    staticData.slice(1).forEach(function(row) {
+      const program = getValueAtIndex_(row, programIndex);
+      const es2 = getValueAtIndex_(row, es2Index);
+      if (program && es2 && !config.programOwners[program]) config.programOwners[program] = es2;
+      if (program && es2) {
+        if (!config.es2Programs[es2]) config.es2Programs[es2] = [];
+        if (config.es2Programs[es2].indexOf(program) === -1) config.es2Programs[es2].push(program);
+      }
+    });
+  }
+  config.es2Owners = Object.keys(config.es2Programs).sort();
+  Object.keys(config.es2Programs).forEach(function(es2) {
+    config.es2Programs[es2].sort();
+  });
+  return config;
+}
+
+function buildUserDirectory_(usersData) {
+  const directory = { names: [], byToken: {} };
+  if (!usersData || usersData.length < 2) return directory;
+  const headers = usersData[0].map(toTrimmedString_);
+  const headerMap = buildHeaderMap_(headers);
+  const nameIndex = resolveHeaderIndex_(headerMap, USER_NAME_ALIASES);
+  if (nameIndex === -1) return directory;
+  usersData.slice(1).forEach(function(row) {
+    const name = getValueAtIndex_(row, nameIndex);
+    const token = normalizeToken_(name);
+    if (!name || !token || directory.byToken[token]) return;
+    directory.byToken[token] = name;
+    directory.names.push(name);
+  });
+  directory.names.sort();
+  return directory;
+}
+
+function getDirectoryDisplayValue_(rawValue, userDirectory) {
+  if (!rawValue) return "";
+  const normalized = normalizeToken_(rawValue);
+  return userDirectory.byToken[normalized] || rawValue;
+}
+
+function buildDataTypesConfig_(dataTypesData) {
+  const config = {
+    aliasMap: {
+      "walk-in": "Walk-In", "walk in": "Walk-In", "walkin": "Walk-In", "onsite": "Walk-In",
+      "on-site": "Walk-In", "in person": "Walk-In", "personal appearance": "Walk-In",
+      "online": "Online", "on line": "Online", "portal": "Online", "email": "Online",
+      "e-mail": "Online", "electronic": "Online"
+    },
+    transactionTypes: ["Walk-In", "Online"]
+  };
+  if (!dataTypesData || dataTypesData.length < 2) return config;
+  dataTypesData.forEach(function(row) {
+    const normalizedRow = row.map(normalizeToken_).filter(Boolean);
+    if (!normalizedRow.length) return;
+    const hasWalkIn = normalizedRow.some(function(value) { return /walk/.test(value); });
+    const hasOnline = normalizedRow.some(function(value) { return /online/.test(value); });
+    if (!hasWalkIn && !hasOnline) return;
+    const canonical = hasWalkIn ? "Walk-In" : "Online";
+    row.forEach(function(value) {
+      const token = normalizeToken_(value);
+      if (token) config.aliasMap[token] = canonical;
+    });
+  });
+  return config;
+}
+
+function normalizeTransactionType_(value, dataTypesConfig) {
+  const token = normalizeToken_(value);
+  return dataTypesConfig.aliasMap[token] || value || "Unspecified";
+}
+
+function normalizeDateValue_(value) {
+  if (!value) return "";
+  if (Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  const parsed = new Date(toTrimmedString_(value));
+  return isNaN(parsed.getTime()) ? "" : Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+}
+
+function buildUserList_(values, userDirectory) {
+  const list = [];
+  const seen = {};
+  values.forEach(function(val) {
+    if (!val) return;
+    const normalized = normalizeToken_(val);
+    const display = userDirectory.byToken[normalized] || val;
+    if (display && !seen[display]) {
+      seen[display] = true;
+      list.push(display);
+    }
+  });
+  return list;
+}
+
+function normalizeRecord_(row, fieldIndexes, staticConfig, userDirectory, dataTypesConfig, rowNumber) {
+  const program = getValueAtField_(row, fieldIndexes.program);
+  const recordId = getValueAtField_(row, fieldIndexes.recordId);
+  const studentName = getValueAtField_(row, fieldIndexes.studentName);
+  const applicationStatus = getValueAtField_(row, fieldIndexes.applicationStatus);
+  const statusOfApplication = getValueAtField_(row, fieldIndexes.statusOfApplication);
+  const stages = {};
+  const ownerRaw = staticConfig.programOwners[program] || getValueAtField_(row, fieldIndexes.es2InCharge) || "";
+  const ownerDisplay = getDirectoryDisplayValue_(ownerRaw, userDirectory);
+  const transactionType = normalizeTransactionType_(getValueAtField_(row, fieldIndexes.transactionType), dataTypesConfig);
+  
+  const stageAssignments = {
+    evaluation: buildUserList_([getValueAtField_(row, fieldIndexes.assignedPerson)], userDirectory),
+    verification: buildUserList_([getValueAtField_(row, fieldIndexes.verificationAssignedPerson)], userDirectory),
+    issuance: buildUserList_([getValueAtField_(row, fieldIndexes.issuanceAssignedPerson)], userDirectory),
+    signature: buildUserList_([getValueAtField_(row, fieldIndexes.signatureAssignedPerson)], userDirectory),
+    release: buildUserList_([getValueAtField_(row, fieldIndexes.releaseAssignedPerson)], userDirectory)
+  };
+  
+  STAGE_DEFINITIONS.forEach(function(stage) {
+    stages[stage.key] = {
+      status: getValueAtField_(row, fieldIndexes[stage.statusField])
+    };
+  });
+  
+  const rawStatusValue = applicationStatus || statusOfApplication;
+  
+  return {
+    _row: rowNumber,
+    recordId: recordId,
+    studentName: studentName,
+    program: program,
+    es2InCharge: ownerDisplay,
+    es2InChargeRaw: ownerRaw,
+    applicationStatus: applicationStatus,
+    statusOfApplication: statusOfApplication,
+    statusValue: rawStatusValue,
+    transactionType: transactionType,
+    hei: getValueAtField_(row, fieldIndexes.hei),
+    dateReceived: normalizeDateValue_(getValueAtField_(row, fieldIndexes.dateReceived)),
+    verificationDateReceived: normalizeDateValue_(getValueAtField_(row, fieldIndexes.verificationDateReceived)),
+    issuanceDateReceived: normalizeDateValue_(getValueAtField_(row, fieldIndexes.issuanceDateReceived)),
+    deficiencyDateReceived: normalizeDateValue_(getValueAtField_(row, fieldIndexes.deficiencyDateReceived)),
+    releaseDateReceived: normalizeDateValue_(getValueAtField_(row, fieldIndexes.releaseDateReceived)),
+    targetReleaseDate: normalizeDateValue_(getValueAtField_(row, fieldIndexes.targetReleaseDate)),
+    evaluationAssignedPeople: stageAssignments.evaluation,
+    evaluationAssignedPeopleText: stageAssignments.evaluation.join(", "),
+    issuanceAssignedPeople: stageAssignments.issuance,
+    issuanceAssignedPeopleText: stageAssignments.issuance.join(", "),
+    signatureAssignedPeople: stageAssignments.signature,
+    signatureAssignedPeopleText: stageAssignments.signature.join(", "),
+    releaseAssignedPeople: stageAssignments.release,
+    releaseAssignedPeopleText: stageAssignments.release.join(", "),
+    stages: stages,
+    tokens: {
+      program: normalizeToken_(program),
+      es2InCharge: normalizeToken_(ownerDisplay),
+      transactionType: normalizeToken_(transactionType),
+      hei: normalizeToken_(getValueAtField_(row, fieldIndexes.hei))
+    }
+  };
+}
+
+// ========== Reporting_Flat Rebuild Functions (Ported from Executive Dashboard) ==========
+
+function rebuildReportingFlat() {
+  try {
+    const spreadsheet = SpreadsheetApp.openById(spreadsheetID);
+    const databaseSheet = mustGetSheet_(spreadsheet, databaseSheetName);
+    const staticSheet = spreadsheet.getSheetByName("Static");
+    const usersSheet = spreadsheet.getSheetByName(usersSheetName);
+    const dataTypesSheet = spreadsheet.getSheetByName(dataTypesSheetName);
+    
+    const staticData = readWholeSheet_(staticSheet);
+    const usersData = readWholeSheet_(usersSheet);
+    const dataTypesData = readWholeSheet_(dataTypesSheet);
+    
+    const lastRow = databaseSheet.getLastRow();
+    const lastColumn = databaseSheet.getLastColumn();
+    const totalDataRows = Math.max(0, lastRow - 1);
+    const headers = lastColumn ? databaseSheet.getRange(1, 1, 1, lastColumn).getValues()[0] : [];
+    
+    const rebuildResult = rebuildReportingFlatBatched_(spreadsheet, databaseSheet, headers, totalDataRows, staticData, usersData, dataTypesData);
+    
+    return {
+      ok: true,
+      rowsWritten: Number(rebuildResult.rowsWritten || 0),
+      processedRows: Number(rebuildResult.processedRows || 0),
+      totalDataRows: totalDataRows,
+      complete: !!rebuildResult.complete,
+      sheetName: "Reporting_Flat"
+    };
+  } catch (error) {
+    Logger.log("[REBUILD] Error: " + error.toString());
+    throw error;
+  }
+}
+
+function rebuildReportingFlatBatched_(spreadsheet, databaseSheet, headers, totalDataRows, staticData, usersData, dataTypesData) {
+  const startedAt = new Date().getTime();
+  let state = getReportingFlatRebuildState_();
+  const headerMap = buildHeaderMap_(headers.map(toTrimmedString_));
+  const fieldIndexes = buildFieldIndexMap_(headerMap);
+  const staticConfig = buildStaticConfig_(staticData);
+  const userDirectory = buildUserDirectory_(usersData);
+  const dataTypesConfig = buildDataTypesConfig_(dataTypesData);
+  const sourceLastColumn = databaseSheet.getLastColumn();
+  const existingSheet = spreadsheet.getSheetByName("Reporting_Flat");
+  const existingDataRows = existingSheet ? Math.max(0, existingSheet.getLastRow() - 1) : 0;
+  
+  if ((existingDataRows === 0 && state && Number(state.nextSourceRow || 0) > 2) || !state) {
+    state = null;
+  }
+  
+  let nextSourceRow = state && state.nextSourceRow ? Number(state.nextSourceRow) : 2;
+  let processedRows = 0;
+  let rowsWritten = 0;
+  
+  ensureReportingFlatSheetInitialized_(spreadsheet, !state);
+  
+  while (nextSourceRow <= totalDataRows + 1 && (new Date().getTime() - startedAt) < DASHBOARD_FLAT_REBUILD_EXECUTION_BUDGET_MS) {
+    const remainingRows = (totalDataRows + 1) - nextSourceRow + 1;
+    const batchRowCount = Math.min(DASHBOARD_FLAT_REBUILD_BATCH_SIZE, Math.max(0, remainingRows));
+    if (!batchRowCount) break;
+    const batchValues = databaseSheet.getRange(nextSourceRow, 1, batchRowCount, sourceLastColumn).getValues();
+    const flatRows = [];
+    
+    for (var i = 0; i < batchValues.length; i += 1) {
+      const normalized = normalizeRecord_(batchValues[i], fieldIndexes, staticConfig, userDirectory, dataTypesConfig, nextSourceRow + i);
+      if (!hasMeaningfulRecord_(normalized)) continue;
+      flatRows.push(mapNormalizedRecordToFlatRow_(normalized));
+    }
+    
+    appendReportingFlatRows_(spreadsheet, flatRows);
+    rowsWritten += flatRows.length;
+    processedRows += batchValues.length;
+    nextSourceRow += batchValues.length;
+  }
+  
+  const complete = nextSourceRow > totalDataRows + 1;
+  if (complete) {
+    clearReportingFlatRebuildState_();
+    sortReportingFlatSheet_(spreadsheet);
+  } else {
+    setReportingFlatRebuildState_({
+      nextSourceRow: nextSourceRow
+    });
+  }
+  
+  return {
+    complete: complete,
+    rowsWritten: rowsWritten,
+    processedRows: processedRows,
+    nextSourceRow: complete ? 0 : nextSourceRow
+  };
+}
+
+function ensureReportingFlatSheetInitialized_(spreadsheet, resetSheet) {
+  let sheet = spreadsheet.getSheetByName("Reporting_Flat");
+  if (!sheet) sheet = spreadsheet.insertSheet("Reporting_Flat");
+  if (resetSheet) {
+    sheet.clearContents();
+    sheet.getRange(1, 1, 1, DASHBOARD_REPORTING_FLAT_HEADERS.length).setValues([DASHBOARD_REPORTING_FLAT_HEADERS]);
+  } else if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, DASHBOARD_REPORTING_FLAT_HEADERS.length).setValues([DASHBOARD_REPORTING_FLAT_HEADERS]);
+  }
+  return sheet;
+}
+
+function appendReportingFlatRows_(spreadsheet, rows) {
+  if (!rows || !rows.length) return;
+  const sheet = ensureReportingFlatSheetInitialized_(spreadsheet, false);
+  const values = rows.map(function(row) {
+    return DASHBOARD_REPORTING_FLAT_HEADERS.map(function(header) {
+      return Object.prototype.hasOwnProperty.call(row, header) ? row[header] : "";
+    });
+  });
+  sheet.getRange(sheet.getLastRow() + 1, 1, values.length, DASHBOARD_REPORTING_FLAT_HEADERS.length).setValues(values);
+}
+
+function sortReportingFlatSheet_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName("Reporting_Flat");
+  if (!sheet) return;
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  if (lastRow <= 2 || !lastColumn) return;
+  const headerMap = buildHeaderMap_(DASHBOARD_REPORTING_FLAT_HEADERS);
+  const dateIndex = getFlatIndex_(headerMap, "dateReceived") + 1;
+  const rowIndex = getFlatIndex_(headerMap, "_row") + 1;
+  if (!dateIndex || !rowIndex) return;
+  sheet.getRange(2, 1, lastRow - 1, lastColumn).sort([
+    { column: dateIndex, ascending: false },
+    { column: rowIndex, ascending: false }
+  ]);
+}
+
+function getReportingFlatRebuildState_() {
+  const value = PropertiesService.getScriptProperties().getProperty(DASHBOARD_FLAT_REBUILD_STATE_KEY);
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return null;
+  }
+}
+
+function setReportingFlatRebuildState_(state) {
+  PropertiesService.getScriptProperties().setProperty(DASHBOARD_FLAT_REBUILD_STATE_KEY, JSON.stringify(state || {}));
+}
+
+function clearReportingFlatRebuildState_() {
+  PropertiesService.getScriptProperties().deleteProperty(DASHBOARD_FLAT_REBUILD_STATE_KEY);
+}
+
+function resetReportingFlatRebuildState() {
+  clearReportingFlatRebuildState_();
+  return {
+    ok: true,
+    nextSourceRow: 2
+  };
+}
+
+function installReportingFlatRefreshTrigger() {
+  removeReportingFlatRefreshTrigger();
+  ScriptApp.newTrigger("rebuildReportingFlat")
+    .timeBased()
+    .everyMinutes(DASHBOARD_FLAT_REBUILD_INTERVAL_MINUTES)
+    .create();
+  return {
+    ok: true,
+    message: "Trigger installed for every " + DASHBOARD_FLAT_REBUILD_INTERVAL_MINUTES + " minutes"
+  };
+}
+
+function removeReportingFlatRefreshTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function(trigger) {
+    if (trigger.getHandlerFunction() === "rebuildReportingFlat") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  return { ok: true, message: "Triggers removed" };
+}
+
+// ========== Helper Functions for Reporting_Flat ==========
+
+function mapNormalizedRecordToFlatRow_(normalized) {
+  var row = {};
+  DASHBOARD_REPORTING_FLAT_HEADERS.forEach(function(header) {
+    if (header === "_row") {
+      row[header] = normalized._row || "";
+    } else if (normalized.hasOwnProperty(header)) {
+      row[header] = normalized[header];
+    } else if (normalized.tokens && normalized.tokens.hasOwnProperty(header)) {
+      row[header] = normalized.tokens[header];
+    } else if (normalized.stages && header.indexOf("Status") > -1) {
+      var stageKey = header.replace("Status", "").toLowerCase();
+      if (normalized.stages[stageKey]) {
+        row[header] = normalized.stages[stageKey].status || "";
+      } else {
+        row[header] = "";
+      }
+    } else if (header.indexOf("DateReceived") > -1 && header !== "dateReceived") {
+      var stageKey = header.replace("DateReceived", "").toLowerCase();
+      if (normalized.stages && normalized.stages[stageKey]) {
+        row[header] = normalized.stages[stageKey].dateReceived || "";
+      } else {
+        row[header] = "";
+      }
+    } else if (header.indexOf("DateAccomplished") > -1) {
+      var stageKey = header.replace("DateAccomplished", "").toLowerCase();
+      if (normalized.stages && normalized.stages[stageKey]) {
+        row[header] = normalized.stages[stageKey].dateAccomplished || "";
+      } else {
+        row[header] = "";
+      }
+    } else if (header.indexOf("AssignedPeopleText") > -1) {
+      var stageKey = header.replace("AssignedPeopleText", "").toLowerCase();
+      if (stageKey === "evaluation" && normalized.evaluationAssignedPeopleText) {
+        row[header] = normalized.evaluationAssignedPeopleText;
+      } else if (stageKey === "issuance" && normalized.issuanceAssignedPeopleText) {
+        row[header] = normalized.issuanceAssignedPeopleText;
+      } else if (stageKey === "signature" && normalized.signatureAssignedPeopleText) {
+        row[header] = normalized.signatureAssignedPeopleText;
+      } else if (stageKey === "release" && normalized.releaseAssignedPeopleText) {
+        row[header] = normalized.releaseAssignedPeopleText;
+      } else if (stageKey === "verification" && normalized.verificationAssignedPeople) {
+        row[header] = normalized.verificationAssignedPeople.join(", ");
+      } else {
+        row[header] = "";
+      }
+    } else {
+      row[header] = "";
+    }
+  });
+  return row;
+}
+
+function hasMeaningfulRecord_(normalized) {
+  return normalized && normalized.recordId && normalized.studentName;
+}
+
+function getFlatIndex_(headerMap, fieldName) {
+  return headerMap.hasOwnProperty(toCanonicalKey_(fieldName)) ? headerMap[toCanonicalKey_(fieldName)] : -1;
+}
+
+function mustGetSheet_(spreadsheet, sheetName) {
+  const sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) throw new Error('Required sheet "' + sheetName + '" was not found.');
+  return sheet;
+}

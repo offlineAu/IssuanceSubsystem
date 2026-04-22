@@ -19,6 +19,17 @@ if (typeof Object.assign !== 'function') {
 }
 
 var Controller = {
+  // Live mode: when true, bypasses all caches for instant fresh data
+  liveMode: false,
+
+  toggleLiveMode: function() {
+    this.liveMode = !this.liveMode;
+    console.log("[CONTROLLER] Live mode: " + (this.liveMode ? "ON - Fresh data from BigQuery" : "OFF - Using cache"));
+    // Refresh to apply
+    this.loadDashboard();
+    return this.liveMode;
+  },
+
   executeDashboardRequest: function(requestToken, runRequest, uiMessage) {
     var that = this;
     runRequest(function(payload) {
@@ -146,7 +157,7 @@ var Controller = {
   loadDashboard: function() {
     var requestToken = Model.beginDashboardRequest();
     this.executeDashboardRequest(requestToken, function(onSuccess, onFailure) {
-      Service.getDashboardData(onSuccess, onFailure);
+      Service.getDashboardData(Model.filters, onSuccess, onFailure);
     }, "Loading analytics...");
   },
 
@@ -198,7 +209,18 @@ var Controller = {
   },
 
   handleClearFilters: function() {
+    // Preserve date preset while clearing other filters
+    var currentDatePreset = Model.filters.datePreset;
+    var currentDateFrom = Model.filters.dateFrom;
+    var currentDateTo = Model.filters.dateTo;
+    
     Model.resetFilters(false);
+    
+    // Restore date filter
+    Model.filters.datePreset = currentDatePreset;
+    Model.filters.dateFrom = currentDateFrom;
+    Model.filters.dateTo = currentDateTo;
+    
     View.populateFilters(Model.filterOptions);
     View.syncDateFilterMode();
     View.setFilterBusy(true, "Resetting analytics...");
@@ -209,6 +231,19 @@ var Controller = {
     }, "Resetting analytics...");
   },
 
+  handleRefresh: function() {
+    // Preserve current date preset while refreshing data
+    var currentDatePreset = Model.filters.datePreset;
+    var currentDateFrom = Model.filters.dateFrom;
+    var currentDateTo = Model.filters.dateTo;
+    
+    // Clear cache for fresh data
+    Service.clearCache && Service.clearCache();
+    
+    // Reload with preserved date filter
+    this.loadDashboardWithFilters(Model.filters);
+  },
+
   handleMonthlyYearChange: function() {
     if (Model.dom.monthlyYearSelect) {
       Model.monthlyYear = Model.dom.monthlyYearSelect.value || "";
@@ -217,8 +252,18 @@ var Controller = {
   },
 
   handleRefresh: function() {
+    // Preserve current date preset while refreshing other filters
+    var currentDatePreset = Model.filters.datePreset;
+    var currentDateFrom = Model.filters.dateFrom;
+    var currentDateTo = Model.filters.dateTo;
+    
     Model.resetFilters();
-    Model.resetData();
+    
+    // Restore date filter
+    Model.filters.datePreset = currentDatePreset;
+    Model.filters.dateFrom = currentDateFrom;
+    Model.filters.dateTo = currentDateTo;
+    
     View.setFiltersLocked(true);
     View.setRefreshBusy(true);
     View.setLoadingMore(false);

@@ -241,8 +241,30 @@ var Model = {
     var selectedOwner = this.filters && this.filters.es2InCharge && this.filters.es2InCharge !== "ALL" ? this.filters.es2InCharge : "";
     var selectedProgram = this.filters && this.filters.program && this.filters.program !== "ALL" ? this.filters.program : "";
     var programOwnershipMap = this.referenceData.programOwnershipMap || {};
-    var basePrograms = Array.isArray(this.filterOptions.programs) ? this.filterOptions.programs.slice() : Object.keys(programOwnershipMap || {});
-    var baseOwners = Array.isArray(this.filterOptions.es2Owners) && this.filterOptions.es2Owners.length ? this.filterOptions.es2Owners.slice() : (this.referenceData.es2Owners || []).slice();
+    // Use referenceData as the source of truth for ALL available options
+    // This ensures when ALL is selected, we show everything, not just previously filtered items
+    var allPrograms = Object.keys(programOwnershipMap || {}).sort();
+    var allOwners = (this.referenceData.es2Owners || []).slice();
+    var basePrograms = allPrograms.length ? allPrograms : (Array.isArray(this.filterOptions.programs) ? this.filterOptions.programs.slice() : []);
+    var baseOwners = allOwners.length ? allOwners : (Array.isArray(this.filterOptions.es2Owners) && this.filterOptions.es2Owners.length ? this.filterOptions.es2Owners.slice() : []);
+    
+    // When no filter selected (ALL), return all options
+    if (!selectedOwner && !selectedProgram) {
+      return {
+        programs: basePrograms,
+        es2Owners: baseOwners,
+        applicationStatuses: Array.isArray(this.filterOptions.applicationStatuses) ? this.filterOptions.applicationStatuses.slice() : (this.referenceData.staticApplicationStatuses || []).slice(),
+        transactionTypes: Array.isArray(this.filterOptions.transactionTypes) && this.filterOptions.transactionTypes.length
+          ? this.filterOptions.transactionTypes.slice()
+          : (this.referenceData.transactionTypes || ["Walk-In", "Online"]).slice(),
+        heis: Array.isArray(this.filterOptions.heis) ? this.filterOptions.heis.slice().sort() : [],
+        dateRange: this.filterOptions.dateRange
+          ? { min: this.filterOptions.dateRange.min || "", max: this.filterOptions.dateRange.max || "" }
+          : { min: "", max: "" }
+      };
+    }
+    
+    // Filtered mode: apply cascading logic
     var ownedPrograms = Object.keys(programOwnershipMap).filter(function(program) {
       return !selectedOwner || programOwnershipMap[program] === selectedOwner;
     });

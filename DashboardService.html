@@ -55,8 +55,19 @@ var Service = {
     }, this.initialRpcDelayMs);
   },
 
-  getDashboardData: function(onSuccess, onFailure) {
-    this.runServerCallWithInitialDelay("getDashboardData", [], onSuccess, onFailure);
+  getDashboardData: function(filters, onSuccess, onFailure) {
+    // Support both (filters, onSuccess, onFailure) and (onSuccess, onFailure) signatures
+    if (typeof filters === 'function') {
+      onFailure = onSuccess;
+      onSuccess = filters;
+      filters = {};
+    }
+    // Add liveMode flag to bypass cache when needed
+    var payload = filters || {};
+    if (Controller.liveMode) {
+      payload._liveMode = true;
+    }
+    this.runServerCallWithInitialDelay("getDashboardData", [payload], onSuccess, onFailure);
   },
 
   getAnalyticsData: function(filters, onSuccess, onFailure) {

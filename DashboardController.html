@@ -76,8 +76,16 @@ var Controller = {
     Model.resetData();
     View.setFiltersLocked(true);
     this.loadNavbarLogo();
+    this.loadAccountName();
     View.renderLoadingState("Loading analytics...");
     this.loadDashboard();
+  },
+
+  loadAccountName: function() {
+    Service.getAccountName(function(name) {
+      var el = document.getElementById('accountName');
+      if (el) el.textContent = name || "";
+    });
   },
 
   loadNavbarLogo: function() {
@@ -200,20 +208,26 @@ var Controller = {
   handleFilterDraftChange: function() {
     Model.updateDraftFilters(View.readFilters());
     Model.sanitizeFilters();
-    Model.updateDraftFilters(Model.filters);
     View.syncDateFilterMode();
     View.populateFilters(Model.filterOptions);
   },
 
-  handleApplyFilters: function() {
-    if (!Model.hasPendingFilterChanges) return;
+  handleApplyFilters: function(onSuccess, onError) {
+    if (!Model.hasPendingFilterChanges) return false;
     var requestFilters = Object.assign({}, Model.filters);
     console.info("Executive Dashboard filters applied:", requestFilters);
     View.setFilterBusy(true);
     var requestToken = Model.beginDashboardRequest();
-    this.executeDashboardRequest(requestToken, function(onSuccess, onFailure) {
-      Service.getAnalyticsData(requestFilters, onSuccess, onFailure);
+    this.executeDashboardRequest(requestToken, function(onSuccessCb, onFailureCb) {
+      Service.getAnalyticsData(requestFilters, function(payload) {
+        if (onSuccess) onSuccess();
+        onSuccessCb(payload);
+      }, function(error) {
+        if (onError) onError();
+        onFailureCb(error);
+      });
     });
+    return true;
   },
 
   handleClearFilters: function() {

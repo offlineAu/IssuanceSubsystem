@@ -1,39 +1,19 @@
-<nav class="app-navbar" aria-label="Primary navigation">
-  <div class="app-navbar-shell">
-    <div class="app-navbar-top">
-      <div class="app-navbar-logo-slot">
-        <div class="app-navbar-logo-placeholder is-loading" id="navbarLogoShell">
-          <div class="app-navbar-logo-loading" id="navbarLogoLoading" aria-live="polite">
-            <span class="app-navbar-logo-loading-dot"></span>
-            <span>Loading logo</span>
-          </div>
-          <div class="app-navbar-logo-inner">
-            <img id="navbarLogoImage" class="app-navbar-logo-image" alt="System logo">
-            <span id="navbarLogoFallback" class="app-navbar-logo-fallback d-none">ITS</span>
-          </div>
-        </div>
-      </div>
-      <div class="app-navbar-title-wrap">
-        <h1 class="app-navbar-title">Executive Analytics Dashboard</h1>
-      </div>
-    </div>
-    <div class="app-navbar-navrow">
-      <div class="app-navbar-account" aria-label="Current access mode">
-        <div class="status-badge">
-          <div class="status-dot"></div>
-          <span id="accountName" class="app-navbar-account-name">ES II</span>
-        </div>
-      </div>
-      <div class="app-navbar-tabs">
-        <button type="button" class="app-navbar-link is-active dashboard-icon-loading" id="navDashboardBtn" data-view="dashboard" aria-pressed="true">
-          <i data-lucide="layout-dashboard" style="width:18px;height:18px;"></i>
-          <span class="icon-skeleton-dashboard"></span>
-          <span>Dashboard</span>
-        </button>
-      </div>
-    </div>
-  </div>
-</nav>
+<script>
+  // Inject Dashboard tabs into shared navbar
+  document.addEventListener('DOMContentLoaded', function() {
+    var tabsContainer = document.getElementById('navbarTabs');
+    if (tabsContainer) {
+      tabsContainer.innerHTML =
+        '<button type="button" class="app-navbar-link is-active" id="navDashboardBtn" data-view="dashboard" aria-pressed="true">' +
+          '<i data-lucide="layout-dashboard" style="width:18px;height:18px;"></i>' +
+          '<span>Dashboard</span>' +
+        '</button>';
+    }
+    // Set navbar title for this role
+    var title = document.getElementById('appNavbarTitle');
+    if (title) title.textContent = 'Executive Analytics Dashboard';
+  });
+</script>
 
 <!-- TRIGGER -->
 <div class="filter-trigger" id="filterTrigger" title="Adjust Perspective">
@@ -90,7 +70,13 @@
     <input id="filterDateTo" type="date" class="form-control-flyout">
   </div>
 
-  <button id="applyFiltersButton" class="btn-apply" type="button">Update Dashboard</button>
+  <button id="applyFiltersButton" class="btn-apply" type="button">
+    <span class="btn-text">Update Dashboard</span>
+    <span class="btn-loading d-none">
+      <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+      Updating...
+    </span>
+  </button>
   <button id="closeFilterPanel" class="btn btn-link text-muted small mt-3 text-decoration-none" type="button">Dismiss</button>
 </div>
 
@@ -99,11 +85,6 @@
   <section id="pageStatusBanner" class="dashboard-banner d-none" aria-live="polite"></section>
 
   <section class="report-shell">
-    <div id="reportLoadingState" class="report-inline-loading d-none">
-      <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-      <span id="reportLoadingText">Loading analytics...</span>
-    </div>
-
     <div class="dashboard-chart-row">
       <div class="dashboard-chart-col">
         <div class="summary-trend-chart-wrapper">
@@ -365,56 +346,74 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body analytics-modal-body">
-        <div id="detailModalSummary" class="modal-summary-grid"></div>
-        <div class="report-chart-grid mt-3">
-          <section class="report-card report-card-compact report-card-scrollable">
-            <div class="report-card-header mb-2">
-              <div>
-                <h3>Programs</h3>
-              </div>
-            </div>
-            <div id="detailModalPrograms" class="report-bars report-scroll-body"></div>
-          </section>
-          <section class="report-card report-card-compact report-card-scrollable">
-            <div class="report-card-header mb-2">
-              <div>
-                <h3>Transaction Type</h3>
-              </div>
-            </div>
-            <div id="detailModalTransactionTypes" class="report-bars report-scroll-body"></div>
-          </section>
-        </div>
-        <div class="report-chart-grid mt-3">
-          <section class="report-card report-card-compact report-card-scrollable">
-            <div class="report-card-header mb-2">
-              <div>
-                <h3>Overall Status</h3>
-              </div>
-            </div>
-            <div id="detailModalOverallStatus" class="report-bars report-scroll-body"></div>
-          </section>
-          <section class="report-card report-card-compact report-card-scrollable">
-            <div class="report-card-header mb-2">
-              <div>
-                <h3>Status Progression</h3>
-              </div>
-            </div>
-            <div id="detailModalProgression" class="report-bars report-scroll-body"></div>
-          </section>
-        </div>
-        <section class="report-card report-card-compact report-card-scrollable mt-3">
-          <div class="report-card-header mb-2">
+
+        <!-- Application Status Trend (ES2 Owner only) -->
+        <section class="report-card report-card-compact mb-3" id="modalStatusTrendSection">
+          <div class="report-card-header dashboard-card-header">
             <div>
-              <h3>Current Locations</h3>
+              <h3 class="dashboard-card-title">Application Status Trend</h3>
+              <p class="dashboard-card-subtitle">Monthly status progression for this ES II owner</p>
             </div>
           </div>
-          <div id="detailModalLocations" class="report-bars report-scroll-body"></div>
+          <div id="detailModalStatusTrend"></div>
         </section>
+
+        <!-- Programs + Overall Status -->
+        <div class="report-chart-grid mt-3">
+
+          <section class="report-card report-card-compact dashboard-card">
+            <div class="report-card-header dashboard-card-header">
+              <div>
+                <h3 class="dashboard-card-title">Programs</h3>
+                <p class="dashboard-card-subtitle">Top programs by application volume</p>
+              </div>
+            </div>
+            <div id="detailModalPrograms"></div>
+          </section>
+
+          <section class="report-card report-card-compact dashboard-card">
+            <div class="report-card-header dashboard-card-header">
+              <div>
+                <h3 class="dashboard-card-title">Overall Status</h3>
+                <p class="dashboard-card-subtitle">Application status distribution</p>
+              </div>
+            </div>
+            <div id="detailModalOverallStatus"></div>
+          </section>
+
+        </div>
+
+        <!-- Status Progression + Current Locations -->
+        <div class="report-chart-grid mt-3">
+
+          <section class="report-card report-card-compact dashboard-card">
+            <div class="report-card-header dashboard-card-header">
+              <div>
+                <h3 class="dashboard-card-title">Status Progression</h3>
+                <p class="dashboard-card-subtitle">Pipeline distribution from evaluation through release</p>
+              </div>
+            </div>
+            <div id="detailModalProgression"></div>
+          </section>
+
+          <section class="report-card report-card-compact dashboard-card">
+            <div class="report-card-header dashboard-card-header">
+              <div>
+                <h3 class="dashboard-card-title">Current Locations</h3>
+                <p class="dashboard-card-subtitle">Document distribution by location</p>
+              </div>
+            </div>
+            <div id="detailModalLocations"></div>
+          </section>
+
+        </div>
+
+        <!-- Records Table -->
         <section class="report-card report-card-compact mt-3">
-          <div class="report-card-header">
+          <div class="report-card-header dashboard-card-header">
             <div>
-              <h3>Current Filtered Records</h3>
-              <div class="report-card-copy">Compact record list for the selected person under the active dashboard filters.</div>
+              <h3 class="dashboard-card-title">Current Filtered Records</h3>
+              <p class="dashboard-card-subtitle">Record list for the selected entity under active dashboard filters</p>
             </div>
           </div>
           <div class="table-responsive modal-records-scroller">
@@ -429,6 +428,7 @@
             <button id="detailModalNextPage" type="button" class="btn btn-outline-secondary btn-sm">Next</button>
           </div>
         </section>
+
       </div>
     </div>
   </div>

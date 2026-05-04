@@ -33,7 +33,6 @@ var View = {
     Model.dom.filterEs2 = document.getElementById("filterEs2");
     Model.dom.filterProgram = document.getElementById("filterProgram");
     Model.dom.filterStatus = document.getElementById("filterStatus");
-    Model.dom.filterTransactionType = document.getElementById("filterTransactionType");
     Model.dom.filterHei = document.getElementById("filterHei");
     Model.dom.filterDatePreset = document.getElementById("filterDatePreset");
     Model.dom.filterDateFromWrap = document.getElementById("filterDateFromWrap");
@@ -48,6 +47,7 @@ var View = {
     Model.dom.detailModalKicker = document.getElementById("detailModalKicker");
     Model.dom.detailModalTitle = document.getElementById("detailModalTitle");
     Model.dom.detailModalLoadingState = document.getElementById("detailModalLoadingState");
+    Model.dom.detailModalStatusTrend = document.getElementById("detailModalStatusTrend");
     Model.dom.detailModalMeta = document.getElementById("detailModalMeta");
     Model.dom.detailModalSummary = document.getElementById("detailModalSummary");
     Model.dom.detailModalPrograms = document.getElementById("detailModalPrograms");
@@ -78,8 +78,20 @@ var View = {
     });
     if (Model.dom.applyFiltersButton) {
       Model.dom.applyFiltersButton.addEventListener("click", function() {
-        Controller.handleApplyFilters();
-        self.closeFilterFlyout();
+        console.log("Apply button clicked");
+        View.setApplyButtonLoading(true);
+        var applied = Controller.handleApplyFilters(function() {
+          // Success callback - close flyout when data is loaded
+          console.log("Data loaded, closing flyout...");
+          View.closeFilterFlyout();
+          View.setApplyButtonLoading(false);
+        }, function() {
+          // Error callback
+          View.setApplyButtonLoading(false);
+        });
+        if (!applied) {
+          View.setApplyButtonLoading(false);
+        }
       });
     }
     if (Model.dom.refreshButton) Model.dom.refreshButton.addEventListener("click", Controller.handleRefresh.bind(Controller));
@@ -108,7 +120,7 @@ var View = {
     // Close flyout when overlay clicked
     if (Model.dom.filterOverlay) {
       Model.dom.filterOverlay.addEventListener("click", function() {
-        self.closeFilterFlyout();
+        View.closeFilterFlyout();
       });
     }
     // Close flyout on Apply (handled by apply button already)
@@ -123,19 +135,35 @@ var View = {
   },
 
   closeFilterFlyout: function() {
+    console.log("closeFilterFlyout called");
     document.body.classList.remove('filter-open');
+    var flyout = document.getElementById('filterFlyout');
+    if (flyout) {
+      flyout.style.left = '-360px';
+      console.log("Set flyout inline style left to -360px");
+    }
+  },
+
+  setApplyButtonLoading: function(loading) {
+    var btn = Model.dom.applyFiltersButton;
+    if (!btn) return;
+    var btnText = btn.querySelector('.btn-text');
+    var btnLoading = btn.querySelector('.btn-loading');
+    if (btnText) btnText.classList.toggle('d-none', loading);
+    if (btnLoading) btnLoading.classList.toggle('d-none', !loading);
+    btn.disabled = loading;
+    console.log("Apply button loading:", loading);
   },
 
   readFilters: function() {
     return {
-      program: Model.dom.filterProgram.value,
-      es2InCharge: Model.dom.filterEs2.value,
-      datePreset: Model.dom.filterDatePreset.value,
-      dateFrom: Model.dom.filterDateFrom.value,
-      dateTo: Model.dom.filterDateTo.value,
-      applicationStatus: Model.dom.filterStatus.value,
-      transactionType: Model.dom.filterTransactionType.value,
-      hei: Model.dom.filterHei.value
+      program: Model.dom.filterProgram ? Model.dom.filterProgram.value : "ALL",
+      es2InCharge: Model.dom.filterEs2 ? Model.dom.filterEs2.value : "ALL",
+      datePreset: Model.dom.filterDatePreset ? Model.dom.filterDatePreset.value : "thisYear",
+      dateFrom: Model.dom.filterDateFrom ? Model.dom.filterDateFrom.value : "",
+      dateTo: Model.dom.filterDateTo ? Model.dom.filterDateTo.value : "",
+      applicationStatus: Model.dom.filterStatus ? Model.dom.filterStatus.value : "ALL",
+      hei: Model.dom.filterHei ? Model.dom.filterHei.value : "ALL"
     };
   },
 
@@ -1728,27 +1756,6 @@ var View = {
     });
   },
 
-  renderDetailModalLoading: function(kind, name) {
-    Model.modalState.loading = true;
-    if (Model.dom.detailModalKicker) Model.dom.detailModalKicker.textContent = kind;
-    if (Model.dom.detailModalTitle) Model.dom.detailModalTitle.textContent = name;
-    if (Model.dom.detailModalMeta) {
-      Model.dom.detailModalMeta.textContent = "";
-      Model.dom.detailModalMeta.classList.add("d-none");
-    }
-    this.setDetailModalLoading(true);
-    if (Model.dom.detailModalSummary) Model.dom.detailModalSummary.innerHTML = this.buildSummarySkeleton("Loading");
-    if (Model.dom.detailModalPrograms) Model.dom.detailModalPrograms.innerHTML = this.buildChartSkeleton();
-    if (Model.dom.detailModalTransactionTypes) Model.dom.detailModalTransactionTypes.innerHTML = this.buildChartSkeleton();
-    if (Model.dom.detailModalOverallStatus) Model.dom.detailModalOverallStatus.innerHTML = this.buildChartSkeleton();
-    if (Model.dom.detailModalProgression) Model.dom.detailModalProgression.innerHTML = this.buildChartSkeleton();
-    if (Model.dom.detailModalLocations) Model.dom.detailModalLocations.innerHTML = this.buildChartSkeleton();
-    if (Model.dom.detailModalTableHead) Model.dom.detailModalTableHead.innerHTML = "";
-    if (Model.dom.detailModalTableBody) Model.dom.detailModalTableBody.innerHTML = this.buildTableSkeletonRows(6, 5);
-    this.renderDetailModalPagination({ page: 1, pageCount: 1, recordCount: 0, displayedRecordCount: 0 });
-    if (Model.dom.detailModalInstance) Model.dom.detailModalInstance.show();
-  },
-
   setRefreshBusy: function(isBusy) {
     if (!Model.dom.refreshButton) return;
     Model.dom.refreshButton.disabled = isBusy;
@@ -1763,7 +1770,6 @@ var View = {
       element.disabled = !!isBusy;
     });
     this.setApplyButtonState();
-    this.setInlineLoading(isBusy, message || "Filtering analytics...");
   },
 
   setFiltersLocked: function(isLocked) {
@@ -1793,12 +1799,10 @@ var View = {
     if (!Model.dom.applyFiltersButton) return;
     var isBusy = !!Model.filterBusy;
     Model.dom.applyFiltersButton.disabled = isBusy || !!Model.filtersLocked || !Model.hasPendingFilterChanges;
-    Model.dom.applyFiltersButton.textContent = isBusy ? "Applying..." : "Apply Filters";
   },
 
   setInlineLoading: function(show, message) {
     if (Model.dom.reportLoadingState) Model.dom.reportLoadingState.classList.toggle("d-none", !show);
-    if (message && Model.dom.reportLoadingText) Model.dom.reportLoadingText.textContent = message;
     // Show all skeletons when loading, clear them when done
     if (show) {
       this.renderTopProgramsSkeleton();
@@ -2067,7 +2071,9 @@ var View = {
 
   // Modal rendering methods
   renderDetailModalLoading: function(kind, name) {
+    Model.modalState.loading = true;
     if (!Model.dom.detailModalKicker) return;
+
     Model.dom.detailModalKicker.textContent = kind || "Detail";
     if (Model.dom.detailModalTitle) Model.dom.detailModalTitle.textContent = name || "Loading...";
     if (Model.dom.detailModalLoadingState) Model.dom.detailModalLoadingState.classList.remove("d-none");
@@ -2075,29 +2081,83 @@ var View = {
       Model.dom.detailModalMeta.textContent = "Loading records...";
       Model.dom.detailModalMeta.classList.remove("d-none");
     }
-    // Clear content areas
-    if (Model.dom.detailModalSummary) Model.dom.detailModalSummary.innerHTML = this.buildSummarySkeleton("Loading");
-    if (Model.dom.detailModalPrograms) Model.dom.detailModalPrograms.innerHTML = this.buildSilentEmptyState();
-    if (Model.dom.detailModalTransactionTypes) Model.dom.detailModalTransactionTypes.innerHTML = this.buildSilentEmptyState();
-    if (Model.dom.detailModalOverallStatus) Model.dom.detailModalOverallStatus.innerHTML = this.buildSilentEmptyState();
-    if (Model.dom.detailModalProgression) Model.dom.detailModalProgression.innerHTML = this.buildSilentEmptyState();
-    if (Model.dom.detailModalLocations) Model.dom.detailModalLocations.innerHTML = this.buildSilentEmptyState();
-    if (Model.dom.detailModalTableHead) Model.dom.detailModalTableHead.innerHTML = "";
-    if (Model.dom.detailModalTableBody) Model.dom.detailModalTableBody.innerHTML = this.buildTableSkeletonRows(5, 4);
-    
-    // Show modal
+
+    // Status Trend section (ES2 only)
+    var statusTrendEl = Model.dom.detailModalStatusTrend;
+    var statusTrendSection = statusTrendEl ? statusTrendEl.closest('section') : null;
+    var isEs2 = kind === "ES II Owner" || kind === "es2InCharge";
+    if (statusTrendSection) statusTrendSection.classList.toggle('d-none', !isEs2);
+    if (statusTrendEl && isEs2) {
+      statusTrendEl.innerHTML = this.buildModalChartSkeleton(180);
+    }
+
+    // Summary cards skeleton
+    if (Model.dom.detailModalSummary) {
+      Model.dom.detailModalSummary.innerHTML =
+        '<div class="modal-summary-grid">' +
+        Array(4).fill(
+          '<div style="background:#fff;border-radius:16px;padding:20px 24px;border:1px solid rgba(11,29,55,0.06);">' +
+            '<div style="height:10px;width:60%;background:#f1f5f9;border-radius:6px;margin-bottom:12px;animation:pulse 1.5s infinite;"></div>' +
+            '<div style="height:28px;width:40%;background:#f1f5f9;border-radius:8px;animation:pulse 1.5s infinite;"></div>' +
+          '</div>'
+        ).join('') +
+        '</div>';
+    }
+
+    // Programs skeleton
+    if (Model.dom.detailModalPrograms) {
+      Model.dom.detailModalPrograms.innerHTML = this.buildModalChartSkeleton(200);
+    }
+
+    // Overall Status skeleton
+    if (Model.dom.detailModalOverallStatus) {
+      Model.dom.detailModalOverallStatus.innerHTML = this.buildModalChartSkeleton(200);
+    }
+
+    // Status Progression skeleton
+    if (Model.dom.detailModalProgression) {
+      Model.dom.detailModalProgression.innerHTML = this.buildModalBarListSkeleton(5);
+    }
+
+    // Locations skeleton
+    if (Model.dom.detailModalLocations) {
+      Model.dom.detailModalLocations.innerHTML = this.buildModalChartSkeleton(200);
+    }
+
+    // Table head skeleton
+    if (Model.dom.detailModalTableHead) {
+      Model.dom.detailModalTableHead.innerHTML =
+        '<tr>' +
+        Array(6).fill(
+          '<th><div style="height:10px;width:80px;background:#f1f5f9;border-radius:6px;animation:pulse 1.5s infinite;"></div></th>'
+        ).join('') +
+        '</tr>';
+    }
+
+    // Table body skeleton
+    if (Model.dom.detailModalTableBody) {
+      Model.dom.detailModalTableBody.innerHTML = this.buildTableSkeletonRows(8, 6);
+    }
+
+    // Pagination skeleton
+    if (Model.dom.detailModalPageStatus) {
+      Model.dom.detailModalPageStatus.textContent = "Loading...";
+    }
+    if (Model.dom.detailModalPrevPage) Model.dom.detailModalPrevPage.disabled = true;
+    if (Model.dom.detailModalNextPage) Model.dom.detailModalNextPage.disabled = true;
+
     if (Model.dom.detailModalInstance) Model.dom.detailModalInstance.show();
   },
 
   renderDetailModal: function(detail) {
     if (!detail) return;
-    
+
     // Update header
     if (Model.dom.detailModalKicker) Model.dom.detailModalKicker.textContent = detail.kind || "Detail";
     if (Model.dom.detailModalTitle) Model.dom.detailModalTitle.textContent = detail.name || "Analytics Detail";
     if (Model.dom.detailModalLoadingState) Model.dom.detailModalLoadingState.classList.add("d-none");
-    
-    // Update meta (match Executive Dashboard format)
+
+    // Meta
     if (Model.dom.detailModalMeta) {
       var totalCount = Number(detail.totalCount || 0);
       var displayedCount = Number(detail.displayedRecordCount || totalCount);
@@ -2110,78 +2170,71 @@ var View = {
       Model.dom.detailModalMeta.textContent = metaMessage;
       Model.dom.detailModalMeta.classList.remove("d-none");
     }
-    
-    // Render summary cards (match Executive Dashboard)
+
+    // Summary cards
     if (Model.dom.detailModalSummary) {
       Model.dom.detailModalSummary.innerHTML = detail.compactStatusModal ? "" : this.buildModalSummaryCards(detail.summary);
       this.toggleDetailSection(Model.dom.detailModalSummary, !detail.compactStatusModal);
     }
-    
-    // Render programs breakdown with horizontal bar chart (match Executive Dashboard)
+
+    // ── Status Trend (ES2 only) ──────────────────────────────────────────
+    var statusTrendSection = Model.dom.detailModalStatusTrend
+      ? Model.dom.detailModalStatusTrend.closest('section') : null;
+    var isEs2Modal = detail.kind === "ES II Owner" || detail.kind === "es2InCharge";
+    var statusTrendData = detail.statusTrendRows || detail.statusTrend || [];
+
+    if (Model.dom.detailModalStatusTrend) {
+      if (!isEs2Modal) {
+        if (statusTrendSection) statusTrendSection.classList.add('d-none');
+      } else {
+        if (statusTrendSection) statusTrendSection.classList.remove('d-none');
+        this.renderModalStatusTrend(Model.dom.detailModalStatusTrend, statusTrendData, detail.name);
+      }
+    }
+
+    // ── Programs (Top Programs design) ──────────────────────────────────
     if (Model.dom.detailModalPrograms) {
-      this.renderHorizontalBarChart(Model.dom.detailModalPrograms, "detailProgramsChart", {
-        labels: (detail.programRows || detail.programs || []).map(function(row) { return row.label || row.program; }),
-        values: (detail.programRows || detail.programs || []).map(function(row) { return row.value || row.total || 0; }),
-        color: "#1f429b"
-      }, true);
+      this.renderModalPrograms(Model.dom.detailModalPrograms, detail.programRows || detail.programs || []);
     }
-    
-    // Render transaction types with horizontal bar chart
-    if (Model.dom.detailModalTransactionTypes) {
-      this.renderHorizontalBarChart(Model.dom.detailModalTransactionTypes, "detailTransactionChart", {
-        labels: (detail.transactionRows || detail.transactionTypes || []).map(function(row) { return row.label; }),
-        values: (detail.transactionRows || detail.transactionTypes || []).map(function(row) { return row.value; }),
-        color: "#3559c7"
-      }, true);
-    }
-    
-    // Render overall status with donut chart (match Executive Dashboard)
+
+    // ── Overall Status (Donut design) ────────────────────────────────────
     if (Model.dom.detailModalOverallStatus) {
       if (detail.compactStatusModal) {
         this.destroyChart("detailOverallStatusChart");
         Model.dom.detailModalOverallStatus.innerHTML = "";
       } else {
-        this.renderDonutChart(Model.dom.detailModalOverallStatus, "detailOverallStatusChart", detail.overallStatusRows || detail.overallStatus || [], ["#1f429b", "#4f77d1", "#7ea0ea", "#f4d789", "#9ca3af"], true);
+        this.renderModalOverallStatus(Model.dom.detailModalOverallStatus, detail.overallStatusRows || detail.overallStatus || []);
       }
       this.toggleDetailSection(Model.dom.detailModalOverallStatus, !detail.compactStatusModal);
     }
-    
-    // Render status progression with horizontal bar chart
+
+    // ── Status Progression (Pipeline bars design) ────────────────────────
     if (Model.dom.detailModalProgression) {
       if (detail.compactStatusModal) {
         this.destroyChart("detailProgressionChart");
         Model.dom.detailModalProgression.innerHTML = "";
       } else {
         var progressionData = detail.statusProgressionRows || detail.statusProgression || detail.overallStatus || [];
-        this.renderHorizontalBarChart(Model.dom.detailModalProgression, "detailProgressionChart", {
-          labels: progressionData.map(function(row) { return row.label; }),
-          values: progressionData.map(function(row) { return row.value; }),
-          color: "#4f77d1"
-        }, true);
+        this.renderModalStatusProgression(Model.dom.detailModalProgression, progressionData, totalCount);
       }
       this.toggleDetailSection(Model.dom.detailModalProgression, !detail.compactStatusModal);
     }
-    
-    // Render locations with horizontal bar chart
+
+    // ── Locations (Location Load design) ────────────────────────────────
     if (Model.dom.detailModalLocations) {
-      this.renderHorizontalBarChart(Model.dom.detailModalLocations, "detailLocationsChart", {
-        labels: (detail.locationRows || detail.locations || []).map(function(row) { return row.label || row.loc || "Unknown"; }),
-        values: (detail.locationRows || detail.locations || []).map(function(row) { return row.value || row.c || 0; }),
-        color: "#16377f"
-      }, true);
+      this.renderModalLocations(Model.dom.detailModalLocations, detail.locationRows || detail.locations || []);
     }
-    
-    // Render table with dynamic columns like Executive Dashboard
+
+    // ── Table ────────────────────────────────────────────────────────────
     this.renderDetailModalTable(detail.modalColumns || [
       { label: "Record ID", field: "recordId" },
       { label: "Student Name", field: "studentName" },
       { label: "Program", field: "program" },
-      { label: "Status", field: "applicationStatus" },
+      { label: "Status", field: "canonicalStatus" },
       { label: "Location", field: "currentLocation" },
       { label: "Date Received", field: "dateReceived" }
     ], detail.rows || []);
-    
-    // Update pagination
+
     this.renderDetailModalPagination(detail);
   },
 
@@ -2255,6 +2308,481 @@ var View = {
         '</div>' +
       '</div>';
     }.bind(this)).join("");
+  },
+
+  buildModalChartSkeleton: function(height) {
+    var h = height || 200;
+    return '<div style="' +
+      'height:' + h + 'px;' +
+      'background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);' +
+      'background-size:200% 100%;' +
+      'border-radius:12px;' +
+      'animation:skeletonShift 1.2s ease-in-out infinite;' +
+    '"></div>';
+  },
+
+  buildModalBarListSkeleton: function(rowCount) {
+    return Array(rowCount || 5).fill(
+      '<div style="display:flex;align-items:center;gap:12px;padding:10px 0;">' +
+        '<div style="width:110px;height:12px;background:#f1f5f9;border-radius:6px;flex-shrink:0;animation:pulse 1.5s infinite;"></div>' +
+        '<div style="flex:1;height:10px;background:#f1f5f9;border-radius:5px;animation:pulse 1.5s infinite;"></div>' +
+        '<div style="width:36px;height:12px;background:#f1f5f9;border-radius:6px;flex-shrink:0;animation:pulse 1.5s infinite;"></div>' +
+      '</div>'
+    ).join('');
+  },
+  
+  // ── Modal: Application Status Trend ─────────────────────────────────────
+  renderModalStatusTrend: function(container, rows, ownerName) {
+    var self = this;
+    if (!container) return;
+
+    // Build month/status map
+    var monthSet = {};
+    var statusSet = {};
+    var monthKeyToLabel = {};
+
+    rows.forEach(function(row) {
+      if (row.month) {
+        monthSet[row.month] = true;
+        // Normalize YYYY-MM to "Jan 2026" format
+        if (!monthKeyToLabel[row.month]) {
+          var match = String(row.month).match(/^(\d{4})-(\d{2})$/);
+          if (match) {
+            var monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+            var mIdx = parseInt(match[2], 10) - 1;
+            monthKeyToLabel[row.month] = (mIdx >= 0 && mIdx < 12)
+              ? monthNames[mIdx] + " " + match[1]
+              : row.month;
+          } else {
+            monthKeyToLabel[row.month] = row.month;
+          }
+        }
+      }
+      if (row.label) statusSet[row.label] = true;
+    });
+
+    // Sort by raw YYYY-MM key, then map to display labels
+    var monthKeys = Object.keys(monthSet).sort();
+    var months = monthKeys.map(function(k) { return monthKeyToLabel[k]; });
+    var statuses = Object.keys(statusSet);
+
+    if (!months.length || !statuses.length) {
+      container.innerHTML = '<div class="text-muted text-center py-4" style="font-size:0.9rem;">No status trend data available for this owner.</div>';
+      return;
+    }
+
+    // Status colors matching main dashboard
+    var statusColorMap = {
+      "For Evaluation": "#ff9500",
+      "Evaluated":      "#00d4aa",
+      "Deficiency":     "#ff2d55",
+      "Approved":       "#34c759",
+      "Verified":       "#af52de",
+      "For Signature":  "#ffcc00",
+      "For Release":    "#007aff",
+      "Released":       "#5856d6",
+      "Cancelled":      "#8e8e93"
+    };
+
+    // Build datasets
+    var dataByStatus = {};
+    statuses.forEach(function(s) {
+      dataByStatus[s] = monthKeys.map(function() { return 0; });
+    });
+    rows.forEach(function(row) {
+      var mIdx = monthKeys.indexOf(row.month);
+      if (mIdx !== -1 && row.label && dataByStatus[row.label]) {
+        dataByStatus[row.label][mIdx] = Number(row.value || row.count || 0);
+      }
+    });
+
+    var datasets = statuses.map(function(s) {
+      var color = statusColorMap[s] || "#1f429b";
+      return {
+        label: s,
+        data: dataByStatus[s],
+        fill: true,
+        backgroundColor: color + "20",
+        borderColor: color,
+        borderWidth: 2,
+        tension: 0.4,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+        pointBackgroundColor: color,
+        pointBorderColor: "#fff",
+        pointBorderWidth: 2
+      };
+    });
+
+    // Sliding window (same as main dashboard)
+    var WINDOW = 8;
+    var winStart = Math.max(0, months.length - WINDOW);
+    var maxWinStart = Math.max(0, months.length - WINDOW);
+
+    var legendId   = "modalTrendLegend_" + Date.now();
+    var prevId     = "modalTrendPrev_"   + Date.now();
+    var nextId     = "modalTrendNext_"   + Date.now();
+    var navLabelId = "modalTrendNav_"    + Date.now();
+    var canvasId   = "modalTrendCanvas_" + Date.now();
+
+    container.innerHTML =
+      '<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-bottom:12px;" id="' + legendId + '"></div>' +
+      '<div style="display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:10px;">' +
+        '<button type="button" class="summary-trend-chart-nav-btn" id="' + prevId + '">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>' +
+        '</button>' +
+        '<span class="summary-trend-chart-nav-label" id="' + navLabelId + '"></span>' +
+        '<button type="button" class="summary-trend-chart-nav-btn" id="' + nextId + '">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+        '</button>' +
+      '</div>' +
+      '<div style="position:relative;height:220px;"><canvas id="' + canvasId + '"></canvas></div>';
+
+    function getSlice() {
+      var end = Math.min(winStart + WINDOW, months.length);
+      return {
+        labels: months.slice(winStart, end),
+        datasets: datasets.map(function(d) {
+          return Object.assign({}, d, { data: d.data.slice(winStart, end) });
+        })
+      };
+    }
+
+    function updateNav() {
+      var prevBtn  = document.getElementById(prevId);
+      var nextBtn  = document.getElementById(nextId);
+      var navLabel = document.getElementById(navLabelId);
+      if (prevBtn)  prevBtn.disabled  = winStart === 0;
+      if (nextBtn)  nextBtn.disabled  = winStart >= maxWinStart;
+      if (navLabel) {
+        var end = Math.min(winStart + WINDOW, months.length);
+        navLabel.textContent = months[winStart] + " – " + months[end - 1];
+      }
+    }
+
+    var canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+
+    self.destroyChart("modalStatusTrendChart");
+    var slice = getSlice();
+    var chart = new Chart(canvas.getContext("2d"), {
+      type: "line",
+      data: { labels: slice.labels, datasets: slice.datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: "rgba(255,255,255,0.98)",
+            titleColor: "#1e293b",
+            bodyColor: "#334155",
+            borderColor: "#cbd5e1",
+            borderWidth: 1,
+            padding: 10,
+            cornerRadius: 8,
+            usePointStyle: true,
+            callbacks: {
+              label: function(ctx) {
+                return " " + ctx.dataset.label + ": " + ctx.parsed.y.toLocaleString();
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: "#64748b", font: { size: 10 } } },
+          y: { display: true, position: "right", grid: { display: false },
+              ticks: { color: "#64748b", font: { size: 10 },
+                        callback: function(v) { return v.toLocaleString(); } } }
+        }
+      }
+    });
+    self.chartRegistry["modalStatusTrendChart"] = chart;
+
+    // Legend
+    var legendEl = document.getElementById(legendId);
+    if (legendEl) {
+      datasets.forEach(function(d, i) {
+        var item = document.createElement("div");
+        item.className = "summary-trend-chart-legend-item";
+        item.dataset.index = i;
+        item.innerHTML =
+          '<span class="summary-trend-chart-legend-color" style="background:' + d.borderColor + '"></span>' +
+          '<span>' + d.label + '</span>';
+        item.addEventListener("click", function() {
+          var meta = chart.getDatasetMeta(parseInt(this.dataset.index));
+          meta.hidden = !meta.hidden;
+          this.classList.toggle("hidden", !!meta.hidden);
+          chart.update();
+        });
+        legendEl.appendChild(item);
+      });
+    }
+
+    // Nav buttons
+    var prevBtn = document.getElementById(prevId);
+    var nextBtn = document.getElementById(nextId);
+    if (prevBtn) prevBtn.onclick = function() {
+      if (winStart > 0) { winStart = Math.max(0, winStart - WINDOW); updateNav(); updateChart(); }
+    };
+    if (nextBtn) nextBtn.onclick = function() {
+      if (winStart < maxWinStart) { winStart = Math.min(maxWinStart, winStart + WINDOW); updateNav(); updateChart(); }
+    };
+
+    function updateChart() {
+      var s = getSlice();
+      chart.data.labels = s.labels;
+      chart.data.datasets.forEach(function(d, i) { d.data = s.datasets[i].data; });
+      chart.update('none');
+    }
+
+    updateNav();
+  },
+
+  // ── Modal: Programs (Top Programs split-panel design) ────────────────────
+  renderModalPrograms: function(container, rows) {
+    var self = this;
+    if (!container) return;
+
+    if (!rows || !rows.length) {
+      container.innerHTML = '<div class="text-muted text-center py-4" style="font-size:0.9rem;">No program data available.</div>';
+      return;
+    }
+
+    function getProgramIcon(name) {
+      var n = (name || '').toLowerCase();
+      if (n.includes('business') || n.includes('admin')) return 'briefcase';
+      if (n.includes('crim')) return 'shield';
+      if (n.includes('education') || n.includes('elementary') || n.includes('secondary')) return 'book-open';
+      if (n.includes('nursing') || n.includes('med') || n.includes('health')) return 'heart-pulse';
+      if (n.includes('engineer') || n.includes('tech') || n.includes('computer') || n.includes('it')) return 'monitor';
+      if (n.includes('hospitality') || n.includes('tour')) return 'building';
+      if (n.includes('account') || n.includes('finance')) return 'calculator';
+      if (n.includes('law') || n.includes('legal')) return 'scale';
+      if (n.includes('art') || n.includes('design')) return 'palette';
+      if (n.includes('sci') || n.includes('bio') || n.includes('chem')) return 'flask-conical';
+      return 'graduation-cap';
+    }
+
+    var top = rows[0];
+    var rest = rows.slice(1, 10);
+
+    // Compact split-panel matching main dashboard but sized for modal
+    container.innerHTML =
+      '<div style="display:flex;flex-direction:row;gap:0;border-radius:20px;overflow:hidden;min-height:320px;">' +
+
+        // Hero panel
+        '<div style="' +
+          'background:linear-gradient(160deg,#0066FF 0%,#0044CC 100%);' +
+          'width:35%;min-width:160px;max-width:240px;' +
+          'padding:20px 16px;color:#fff;' +
+          'display:flex;flex-direction:column;align-items:center;text-align:center;' +
+          'border-radius:20px;box-shadow:0px -1px 24px 4px rgba(0,76,255,0.3);' +
+          'margin-right:-20px;z-index:2;' +
+        '">' +
+          '<div style="background:#fff;width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#0056D2;margin-bottom:14px;box-shadow:0 6px 16px rgba(0,0,0,0.12);">' +
+            '<i data-lucide="' + getProgramIcon(top.label || top.program) + '" style="width:28px;height:28px;" stroke-width="2"></i>' +
+          '</div>' +
+          '<div style="font-weight:700;font-size:clamp(0.65rem,1.8vw,0.95rem);line-height:1.3;margin-bottom:10px;word-break:break-word;">' +
+            self.escapeHtml(top.label || top.program || "—") +
+          '</div>' +
+          '<div style="background:rgba(255,255,255,0.15);padding:4px 12px;border-radius:16px;font-size:0.65rem;font-weight:600;letter-spacing:1px;margin-bottom:auto;">' +
+            '● Top Rank' +
+          '</div>' +
+          '<div style="margin-top:16px;">' +
+            '<div style="font-size:2.2rem;font-weight:800;letter-spacing:-1px;line-height:1;">' +
+              self.formatNumber(top.value || top.total || 0) +
+            '</div>' +
+            '<div style="font-size:0.65rem;opacity:0.8;text-transform:uppercase;letter-spacing:1.2px;margin-top:4px;">Total Applicants</div>' +
+          '</div>' +
+        '</div>' +
+
+        // List panel
+        '<div style="' +
+          'flex:1;min-width:0;' +
+          'padding:20px 20px 20px 36px;' +
+          'background:#fff;border-radius:20px;' +
+          'box-shadow:0 4px 16px rgba(15,23,42,0.07);' +
+          'z-index:1;overflow:hidden;' +
+        '">' +
+          '<div style="font-weight:700;font-size:1rem;color:#1E293B;margin-bottom:4px;">Programs</div>' +
+          '<div style="color:#64748B;font-size:0.72rem;margin-bottom:14px;">Ranked by application volume</div>' +
+          '<div style="display:flex;flex-direction:column;gap:0;max-height:240px;overflow-y:auto;padding-right:6px;">' +
+            rest.map(function(row, idx) {
+              var rank = idx + 2;
+              var name = row.label || row.program || "—";
+              var val  = row.value || row.total || 0;
+              return '<div style="display:flex;align-items:center;padding:8px 0;border-bottom:1px solid #f1f5f9;">' +
+                '<div style="position:relative;width:36px;height:36px;background:#F1F5F9;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#94A3B8;margin-right:12px;flex-shrink:0;">' +
+                  '<i data-lucide="' + getProgramIcon(name) + '" style="width:16px;height:16px;" stroke-width="2"></i>' +
+                  '<span style="position:absolute;top:-4px;right:-4px;background:#CBD5E1;color:#fff;width:15px;height:15px;border-radius:50%;font-size:8px;display:flex;align-items:center;justify-content:center;font-weight:700;">' + rank + '</span>' +
+                '</div>' +
+                '<div style="flex:1;min-width:0;">' +
+                  '<div style="font-weight:600;color:#1E293B;font-size:0.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + self.escapeHtml(name) + '</div>' +
+                '</div>' +
+                '<div style="font-weight:700;font-size:0.9rem;color:#1E293B;margin-left:10px;flex-shrink:0;">' + self.formatNumber(val) + '</div>' +
+              '</div>';
+            }).join('') +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    setTimeout(function() {
+      if (window.lucide && typeof lucide.createIcons === 'function') {
+        try { lucide.createIcons({ attrs: { 'stroke-width': 2 }, nameAttr: 'data-lucide' }); } catch(e) {}
+      }
+    }, 50);
+  },
+
+  // ── Modal: Overall Status (Donut matching main dashboard) ─────────────────
+  renderModalOverallStatus: function(container, rows) {
+    var self = this;
+    if (!container) return;
+    this.destroyChart("detailOverallStatusChart");
+
+    var colors = ["#6c5dd3", "#ff75a0", "#4ce1e5", "#5d5fef", "#ff9500", "#34c759", "#007aff", "#ff2d55", "#9ca3af"];
+    var total  = rows.reduce(function(s, r) { return s + (r.value || 0); }, 0);
+
+    var cutout = total.toLocaleString().length <= 3 ? "65%" : total.toLocaleString().length <= 5 ? "70%" : "75%";
+
+    container.innerHTML =
+      '<div class="status-chart-layout">' +
+        '<div class="status-chart-col">' +
+          '<div class="chart-wrapper">' +
+            '<canvas id="modalOverallStatusCanvas"></canvas>' +
+            '<div class="chart-overlay-text">' +
+              '<div class="chart-overlay-number" id="modalOverallStatusTotal">' + self.formatNumber(total) + '</div>' +
+              '<div class="chart-overlay-label">' + (total === 1 ? "Student" : "Students") + '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="status-legend-col">' +
+          '<ul class="legend-list" id="modalOverallStatusLegend">' +
+            rows.map(function(row, i) {
+              return "<li class='legend-item'>" +
+                "<div><span class='legend-dot' style='background:" + colors[i % colors.length] + "'></span>" +
+                self.escapeHtml(row.label || "—") + "</div>" +
+                "<span class='fw-bold'>" + self.formatNumber(row.value || 0) + "</span>" +
+              "</li>";
+            }).join('') +
+          '</ul>' +
+        '</div>' +
+      '</div>';
+
+    var canvas = document.getElementById("modalOverallStatusCanvas");
+    if (!canvas) return;
+
+    this.renderChart("detailOverallStatusChart", canvas, {
+      type: "doughnut",
+      data: {
+        labels: rows.map(function(r) { return r.label || "—"; }),
+        datasets: [{
+          data: rows.map(function(r) { return r.value || 0; }),
+          backgroundColor: colors,
+          borderWidth: 0,
+          cutout: cutout,
+          hoverOffset: 6
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: { padding: 8 },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                var pct = total > 0 ? Math.round((ctx.parsed / total) * 100) : 0;
+                return " " + ctx.label + ": " + self.formatNumber(ctx.parsed) + " (" + pct + "%)";
+              }
+            }
+          }
+        },
+        elements: { arc: { borderRadius: 6 } }
+      }
+    });
+  },
+
+  // ── Modal: Status Progression (Pipeline bars matching main dashboard) ──────
+  renderModalStatusProgression: function(container, rows, total) {
+    var self = this;
+    if (!container) return;
+
+    var colors = ["#6c5dd3", "#ff75a0", "#4ce1e5", "#5d5fef", "#ff9500", "#34c759", "#007aff", "#ff2d55", "#9ca3af"];
+    var grandTotal = Number(total || 0) || rows.reduce(function(s, r) { return s + (r.value || 0); }, 0);
+
+    if (!rows.length) {
+      container.innerHTML = '<div class="text-muted text-center py-4" style="font-size:0.9rem;">No data available.</div>';
+      return;
+    }
+
+    container.innerHTML = rows.map(function(row, index) {
+      var val  = row.value || 0;
+      var pct  = grandTotal > 0 ? Math.round((val / grandTotal) * 100) : 0;
+      var color = colors[index % colors.length];
+      return "<div class='pipeline-row'>" +
+        "<div class='pipeline-info'>" +
+          "<span class='pipeline-label'>" + self.escapeHtml(row.label || "—") + "</span>" +
+          "<span class='pipeline-count'>" + pct + "%</span>" +
+        "</div>" +
+        "<div class='progress-bar-thick'>" +
+          "<div class='progress-fill' style='width:" + pct + "%;background:" + color + ";'></div>" +
+        "</div>" +
+      "</div>";
+    }).join("");
+  },
+
+  // ── Modal: Locations (Location Load design matching main dashboard) ────────
+  renderModalLocations: function(container, rows) {
+    var self = this;
+    if (!container) return;
+
+    if (!rows || !rows.length) {
+      container.innerHTML = '<div class="text-muted text-center py-4" style="font-size:0.9rem;">No location data available.</div>';
+      return;
+    }
+
+    var maxVal = Math.max.apply(Math, rows.map(function(r) { return r.value || 0; }));
+    var topRow = rows[0];
+
+    container.innerHTML =
+      '<div style="display:flex;flex-direction:row;gap:0;align-items:stretch;">' +
+
+        // Summary side
+        '<div style="' +
+          'padding:16px 20px;border-right:1px solid #e2e8f0;min-width:140px;flex-shrink:0;' +
+        '">' +
+          '<div style="font-size:0.65rem;font-weight:800;color:#718096;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:10px;">Document Location</div>' +
+          '<div style="font-size:2rem;font-weight:800;letter-spacing:-1px;color:#0f172a;line-height:1;">' + self.formatNumber(maxVal) + '</div>' +
+          '<div style="font-weight:700;font-size:0.85rem;color:#1e293b;margin-top:10px;">' + self.escapeHtml(topRow.label || "—") + '</div>' +
+          '<div style="display:inline-block;padding:3px 8px;background:#1f429b;color:#fff;font-size:0.6rem;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;border-radius:4px;margin-top:6px;">Primary</div>' +
+        '</div>' +
+
+        // Bars side
+        '<div style="flex:1;padding:16px 20px;overflow-y:auto;max-height:260px;">' +
+          rows.map(function(row, index) {
+            var value   = row.value || 0;
+            var percent = maxVal > 0 ? Math.max(2, (value / maxVal) * 100) : 0;
+            var isTop   = index === 0;
+            return '<div style="display:flex;align-items:center;gap:14px;padding:8px 0;">' +
+              '<div style="width:130px;font-size:0.8rem;font-weight:600;color:#1e293b;text-align:right;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+                self.escapeHtml(row.label || "—") +
+              '</div>' +
+              '<div style="flex:1;height:10px;background:#eee;border-radius:5px;overflow:hidden;">' +
+                '<div style="height:100%;border-radius:5px;width:' + percent.toFixed(1) + '%;background:' +
+                  (isTop ? '#d4a843' : '#1f429b') +
+                ';transition:width 0.5s ease;"></div>' +
+              '</div>' +
+              '<div style="width:48px;font-weight:700;color:' + (isTop ? '#d4a843' : '#1f429b') + ';font-size:0.85rem;flex-shrink:0;">' +
+                self.formatNumber(value) +
+              '</div>' +
+            '</div>';
+          }).join('') +
+        '</div>' +
+
+      '</div>';
   }
 };
 </script>

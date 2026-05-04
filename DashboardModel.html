@@ -224,8 +224,9 @@ var Model = {
       transactionType: serverApplied.transactionType || "ALL",
       hei: serverApplied.hei || "ALL"
     });
-    this.filters = Object.assign({}, this.appliedFilters);
-    this.hasPendingFilterChanges = false;
+    // Preserve user's current filter draft - only update applied filters from server
+    // Don't overwrite this.filters or hasPendingFilterChanges here
+    // Let the UI keep the user's selections
     this.filteredData = this.applyFilters(this.fullData, this.appliedFilters);
     this.filterOptions = payload && payload.filters ? payload.filters : this.buildFilterOptions(this.fullData, this.referenceData, this.filters);
     this.filterOptions = this.getActiveFilterOptions();

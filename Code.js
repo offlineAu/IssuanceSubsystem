@@ -1494,7 +1494,7 @@ function doGet() {
   const userContext = resolveUserContext_(email);
   const position = userContext ? String(userContext.position || "").trim().toLowerCase() : "";
   
-  let templateName = "Index"; // Default for Verifier/Developer
+  let templateName = "IssuanceIndex"; // Default for Verifier/Developer
   let title = "Document Issuance Subsystem";
 
   if (position === "es ii") {
@@ -3903,83 +3903,124 @@ function testCacheLimits_() {
 }
 
 function dashboard_fetchData_(payload) {
-  var rawFilters = payload || {};
-  
-  Logger.log("[FETCH] Raw payload received: " + JSON.stringify(rawFilters));
-  
-  // Extract programOwnershipMap from payload for ES2/Program alignment
-  var programOwnershipMap = rawFilters.programOwnershipMap || {};
-  Logger.log("[FETCH] programOwnershipMap entries: " + Object.keys(programOwnershipMap).length);
-  
-  // Normalize filters using Executive Dashboard logic (resolves date presets to actual dates)
-  var filters = normalizeFilters_(rawFilters);
-  
-  // Build filter options with ownership map for alignment
-  var filterOptions = { programOwnershipMap: programOwnershipMap };
-  
-  Logger.log("[FETCH] Normalized filters: " + JSON.stringify(filters));
-  Logger.log("[FETCH] es2InCharge value: '" + filters.es2InCharge + "' (length: " + (filters.es2InCharge ? filters.es2InCharge.length : 0) + ")");
-  
-  // Check for live mode (bypass all caches)
-  var liveMode = rawFilters._liveMode === true;
-  if (liveMode) {
-    Logger.log("[FETCH] Live mode enabled - bypassing all caches");
-  }
-  
-  // Check cache first (use normalized filters for cache key)
-  var cacheKey = getDashboardCacheKey_(filters);
-  Logger.log("[FETCH] Cache key: " + cacheKey);
-  
-  // Check CacheService first (fastest, 100KB limit) - skip if live mode
-  if (!liveMode) {
-    var cachedData = getCachedDashboardData_(cacheKey);
-    if (cachedData && cachedData.ok) {
-      Logger.log("[FETCH] Returning cached data from CacheService for key: " + cacheKey);
-      return cachedData;
-    }
-  }
-  
-  // Check PropertiesService for default filter (thisYear) - stores up to 500KB - skip if live mode
-  if (!liveMode && filters.datePreset === "thisYear" && !filters.program && !filters.es2InCharge && 
-      !filters.applicationStatus && !filters.transactionType && !filters.hei) {
-    var propertiesCachedData = getDashboardPropertiesCache_();
-    if (propertiesCachedData && propertiesCachedData.ok) {
-      Logger.log("[FETCH] Returning cached data from PropertiesService (default filters)");
-      return propertiesCachedData;
-    }
-  }
-  
-  Logger.log("[FETCH] Cache miss for key: " + cacheKey);
-  
-  var summary, workload, status, turnaround, topPrograms, locationLoad, monthlyVolume, monthlyTrend, slaExposure, stageBacklog, productivity;
-  
   try {
-    summary = getDashboardSummary_(filters, filterOptions);
-    workload = getDashboardWorkloadSummary_(filters, filterOptions);
-    status = getDashboardStatusDistribution_(filters, filterOptions);
-    turnaround = getDashboardTurnaroundAnalytics(filters, filterOptions);
-    topPrograms = getDashboardTopPrograms_(filters, filterOptions);
-    locationLoad = getDashboardLocationLoad_(filters, filterOptions);
-    monthlyVolume = getDashboardMonthlyVolume_(filters, filterOptions);
-    monthlyTrend = getDashboardMonthlyTrend_(filters, filterOptions);
-    slaExposure = getDashboardSlaRows_(filters, filterOptions);
-    stageBacklog = getDashboardBacklogRows_(filters, filterOptions);
-    productivity = getDashboardProductivityRows_(filters, filterOptions);
-  } catch (e) {
-    Logger.log("[FETCH] Critical error in sub-fetches: " + e.toString());
-    // Continue with empty results rather than failing the whole request
-  }
+    var rawFilters = payload || {};
+    
+    Logger.log("[FETCH] Raw payload received: " + JSON.stringify(rawFilters));
+    
+    // Extract programOwnershipMap from payload for ES2/Program alignment
+    var programOwnershipMap = rawFilters.programOwnershipMap || {};
+    Logger.log("[FETCH] programOwnershipMap entries: " + Object.keys(programOwnershipMap).length);
+    
+    // Normalize filters using Executive Dashboard logic (resolves date presets to actual dates)
+    var filters = normalizeFilters_(rawFilters);
+    
+    // Build filter options with ownership map for alignment
+    var filterOptions = { programOwnershipMap: programOwnershipMap };
+    
+    Logger.log("[FETCH] Normalized filters: " + JSON.stringify(filters));
+    Logger.log("[FETCH] es2InCharge value: '" + filters.es2InCharge + "' (length: " + (filters.es2InCharge ? filters.es2InCharge.length : 0) + ")");
+    
+    // Check for live mode (bypass all caches)
+    var liveMode = rawFilters._liveMode === true;
+    if (liveMode) {
+      Logger.log("[FETCH] Live mode enabled - bypassing all caches");
+    }
+    
+    // Check cache first (use normalized filters for cache key)
+    var cacheKey = getDashboardCacheKey_(filters);
+    Logger.log("[FETCH] Cache key: " + cacheKey);
+    
+    // Check CacheService first (fastest, 100KB limit) - skip if live mode
+    if (!liveMode) {
+      var cachedData = getCachedDashboardData_(cacheKey);
+      if (cachedData && cachedData.ok) {
+        Logger.log("[FETCH] Returning cached data from CacheService for key: " + cacheKey);
+        return cachedData;
+      }
+    }
+    
+    // Check PropertiesService for default filter (thisYear) - stores up to 500KB - skip if live mode
+    if (!liveMode && filters.datePreset === "thisYear" && !filters.program && !filters.es2InCharge && 
+        !filters.applicationStatus && !filters.transactionType && !filters.hei) {
+      var propertiesCachedData = getDashboardPropertiesCache_();
+      if (propertiesCachedData && propertiesCachedData.ok) {
+        Logger.log("[FETCH] Returning cached data from PropertiesService (default filters)");
+        return propertiesCachedData;
+      }
+    }
+    
+    Logger.log("[FETCH] Cache miss for key: " + cacheKey);
+    
+    var summary, workload, status, turnaround, topPrograms, locationLoad, monthlyVolume, monthlyTrend, slaExposure, stageBacklog, productivity;
+    var startTime = Date.now();
+    
+    try {
+      Logger.log("[FETCH] Starting getDashboardSummary_...");
+      summary = getDashboardSummary_(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardSummary_ done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] Starting getDashboardWorkloadSummary_...");
+      workload = getDashboardWorkloadSummary_(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardWorkloadSummary_ done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] Starting getDashboardStatusDistribution_...");
+      status = getDashboardStatusDistribution_(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardStatusDistribution_ done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] Starting getDashboardTurnaroundAnalytics...");
+      turnaround = getDashboardTurnaroundAnalytics(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardTurnaroundAnalytics done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] Starting getDashboardTopPrograms_...");
+      topPrograms = getDashboardTopPrograms_(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardTopPrograms_ done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] Starting getDashboardLocationLoad_...");
+      locationLoad = getDashboardLocationLoad_(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardLocationLoad_ done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] Starting getDashboardMonthlyVolume_...");
+      monthlyVolume = getDashboardMonthlyVolume_(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardMonthlyVolume_ done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] Starting getDashboardMonthlyTrend_...");
+      monthlyTrend = getDashboardMonthlyTrend_(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardMonthlyTrend_ done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] Starting getDashboardSlaRows_...");
+      slaExposure = getDashboardSlaRows_(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardSlaRows_ done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] Starting getDashboardBacklogRows_...");
+      stageBacklog = getDashboardBacklogRows_(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardBacklogRows_ done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] Starting getDashboardProductivityRows_...");
+      productivity = getDashboardProductivityRows_(filters, filterOptions);
+      Logger.log("[FETCH] getDashboardProductivityRows_ done in " + (Date.now() - startTime) + "ms");
+      
+      Logger.log("[FETCH] All sub-fetches completed in " + (Date.now() - startTime) + "ms");
+    } catch (e) {
+      Logger.log("[FETCH] Critical error in sub-fetches after " + (Date.now() - startTime) + "ms: " + e.toString());
+      // Continue with empty results rather than failing the whole request
+    }
 
-  // Build filter options from BigQuery (more reliable than Static sheet)
-  var fetchedFilterOptions = getDashboardFilterOptionsFromBigQuery_();
-  
-  // Get available years for Monthly Volume filter
-  var availableYears = getBigQueryAvailableYears_();
-  Logger.log("[FETCH] Available years: " + availableYears.length);
-  
-  Logger.log("[FETCH] Filter options from BigQuery: es2Owners=" + fetchedFilterOptions.es2Owners.length + ", programs=" + fetchedFilterOptions.programs.length);
+    // Build filter options from BigQuery (more reliable than Static sheet)
+    var fetchedFilterOptions, availableYears;
+    try {
+      fetchedFilterOptions = getDashboardFilterOptionsFromBigQuery_();
+      availableYears = getBigQueryAvailableYears_();
+      Logger.log("[FETCH] Available years: " + availableYears.length);
+    } catch (filterError) {
+      Logger.log("[FETCH] Filter options fetch failed: " + filterError.toString());
+      fetchedFilterOptions = { programs: [], es2Owners: [], es2ProgramMap: {}, programOwnershipMap: {} };
+      availableYears = [];
+    }
+    
+    Logger.log("[FETCH] Filter options from BigQuery: es2Owners=" + fetchedFilterOptions.es2Owners.length + ", programs=" + fetchedFilterOptions.programs.length);
 
-  var response = {
+    var response = {
     ok: true,
     filters: fetchedFilterOptions,
     data: {
@@ -3989,6 +4030,16 @@ function dashboard_fetchData_(payload) {
       es2ProgramMap: (fetchedFilterOptions && fetchedFilterOptions.es2ProgramMap) || {},
       programOwnershipMap: (fetchedFilterOptions && fetchedFilterOptions.programOwnershipMap) || {}
     },
+    workload: workload || [],
+    status: status || [],
+    turnaround: turnaround || {},
+    topPrograms: topPrograms || [],
+    locationLoad: locationLoad || [],
+    monthlyVolume: monthlyVolume || [],
+    monthlyTrend: monthlyTrend || [],
+    slaExposure: slaExposure || [],
+    stageBacklog: stageBacklog || [],
+    productivity: productivity || [],
     summary: {
       totalRecords: Number((summary && summary.values && summary.values.totalCount) || 0),
       total: Number((summary && summary.values && summary.values.totalCount) || 0),
@@ -4052,13 +4103,21 @@ function dashboard_fetchData_(payload) {
     Logger.log("[FETCH] Live mode - skipping cache storage");
   }
   
-  // FINAL HARDENING: Ensure the object is clean and serializable for the GAS bridge
-  try {
-    var serialized = JSON.stringify(response);
-    return JSON.parse(serialized);
-  } catch (serializationError) {
-    Logger.log("[FETCH] Serialization failure: " + serializationError.toString());
-    return { ok: false, error: "Data serialization failed." };
+    // FINAL HARDENING: Ensure the object is clean and serializable for the GAS bridge
+    try {
+      Logger.log("[FETCH] About to serialize response, ok=" + response.ok);
+      var serialized = JSON.stringify(response);
+      Logger.log("[FETCH] Serialized length: " + serialized.length);
+      var parsed = JSON.parse(serialized);
+      Logger.log("[FETCH] Returning parsed response");
+      return parsed;
+    } catch (serializationError) {
+      Logger.log("[FETCH] Serialization failure: " + serializationError.toString());
+      return { ok: false, error: "Data serialization failed." };
+    }
+  } catch (topLevelError) {
+    Logger.log("[FETCH] CRITICAL TOP-LEVEL ERROR: " + topLevelError.toString());
+    return { ok: false, error: "Dashboard fetch failed: " + topLevelError.message };
   }
 }
 
@@ -4362,6 +4421,30 @@ function dashboard_getDashboardDetail_(kind, name, filters, page, pageSize) {
     // Determine if this is a compact status modal (for status/location modals)
     var compactStatusModal = normalizedKind === "Application Status" || normalizedKind === "status" || normalizedKind === "Location";
     
+    // Application Status Trend for ES2 Owner modal
+    var statusTrend = [];
+    if (normalizedKind === "ES II Owner" || normalizedKind === "es2InCharge") {
+      var statusTrendResult = runDashboardBigQueryOverSources_(function(source) {
+        return [
+          "SELECT",
+          "  FORMAT_DATE('%Y-%m', dateReceivedDate) AS month,",
+          "  applicationStatus AS status,",
+          "  COUNT(*) AS total",
+          "FROM " + source,
+          "WHERE " + whereClause,
+          "GROUP BY month, status",
+          "ORDER BY month DESC, total DESC"
+        ].join("\n");
+      });
+      statusTrend = mapBigQueryRows_(statusTrendResult.rows, function(values) {
+        return { 
+          month: String(values[0] || ""),
+          label: String(values[1] || ""),
+          value: Number(values[2] || 0)
+        };
+      });
+    }
+
     var response = {
       ok: true,
       detail: {
@@ -4380,11 +4463,13 @@ function dashboard_getDashboardDetail_(kind, name, filters, page, pageSize) {
         transactionRows: transactionTypes,
         locationRows: locations,
         overallStatusRows: overallStatus,
+        statusTrendRows: statusTrend,
         // Legacy naming for backward compatibility
         programs: programs,
         transactionTypes: transactionTypes,
         locations: locations,
-        overallStatus: overallStatus
+        overallStatus: overallStatus,
+        statusTrend: statusTrend
       }
     };
 

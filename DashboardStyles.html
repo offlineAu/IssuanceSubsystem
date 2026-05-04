@@ -1,350 +1,4 @@
 <style>
-:root {
-  --primary: #1f429b;
-  --primary-dark: #16377f;
-  --primary-navy: #1f429b;
-  --gold: #f4d789;
-  --accent-amber: #d97706;
-  --bg-soft: #eff3f8;
-  --text-strong: #0f172a;
-  --text-muted: #64748b;
-  /* Executive card palette from test.html */
-  --pale-oak: #D3C2A0;
-  --slate-grey: #727F8E;
-  --prussian-blue: #0B1D37;
-  --vintage-grape: #49425F;
-  --twilight-indigo: #16315B;
-  --camel: #AC9055;
-  --soft-fawn: #CFB88D;
-  --content-width: 1800px;
-  --page-gutter: 12px;
-  --app-navbar-max-width: 1920px;
-  /* CHED Brand Colors */
-  --ched-navy: #16325C;
-  --ched-gold: #C5A059;
-  --ched-accent-gold: #D4AF37;
-  --ched-dark-navy: #0B1D37;
-}
-
-body {
-  font-family: "Plus Jakarta Sans", "Inter", sans-serif;
-  background: var(--bg-soft);
-  color: var(--text-strong);
-}
-
-.page-shell {
-  width: 100%;
-  padding-top: 18px;
-  padding-bottom: 24px;
-  max-width: calc(var(--content-width) + (var(--page-gutter) * 2));
-  padding-left: var(--page-gutter);
-  padding-right: var(--page-gutter);
-  margin: 0 auto;
-}
-
-.app-navbar {
-  position: sticky;
-  top: 0;
-  z-index: 1030;
-  padding: 0 !important;
-  background: var(--ched-navy);
-  border-radius: 12px 12px 0 0;
-  overflow: visible;
-}
-
-/* Gold Ribbon/Border Slant - pseudo element on navbar */
-.app-navbar-shell::before {
-  content: "";
-  position: absolute;
-  left: -120px;
-  top: 0;
-  height: 150px;
-  width: 500px;
-  background:
-    linear-gradient(180deg, rgba(233, 216, 180, 0.98) 0%, rgba(216, 196, 158, 0.98) 100%);
-  box-shadow:
-    0 12px 22px rgba(9, 19, 48, 0.12),
-    0 1px 0 rgba(255,255,255,0.32) inset,
-    0 -18px 24px rgba(113, 89, 47, 0.08) inset;
-  clip-path: polygon(0 0, 88% 0, 100% 100%, 0% 100%);
-  z-index: 2;
-}
-
-.app-navbar-shell {
-  width: min(100%, var(--app-navbar-max-width));
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-}
-
-.app-navbar-top {
-  display: flex;
-  align-items: center;
-  height: 100px;
-  position: relative;
-}
-
-.app-navbar-logo-slot {
-  position: absolute;
-  left: 0;
-  top: 0;
-  height: 100%;
-  width: 500px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  overflow: visible;
-  z-index: 10;
-}
-
-.app-navbar-logo-placeholder {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  background: transparent;
-  color: rgba(49, 54, 70, 0.7);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.app-navbar-logo-inner {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  padding: 0 20px;
-  margin-left: -250px;
-}
-.app-navbar-logo-loading {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: rgba(57, 67, 86, 0.78);
-  font-size: 0.88rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  margin-left: -250px;
-}
-
-.app-navbar-logo-placeholder.is-loading .app-navbar-logo-loading {
-  display: inline-flex;
-}
-
-.app-navbar-logo-placeholder.is-loading .app-navbar-logo-inner {
-  visibility: hidden;
-}
-
-.app-navbar-logo-loading-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-  background: #274784;
-  box-shadow: 0 0 0 0 rgba(39, 71, 132, 0.34);
-  animation: logoPulse 1.2s ease-out infinite;
-}
-
-@keyframes logoPulse {
-  0% {
-    transform: scale(0.94);
-    box-shadow: 0 0 0 0 rgba(39, 71, 132, 0.34);
-  }
-  70% {
-    transform: scale(1);
-    box-shadow: 0 0 0 10px rgba(39, 71, 132, 0);
-  }
-  100% {
-    transform: scale(0.94);
-    box-shadow: 0 0 0 0 rgba(39, 71, 132, 0);
-  }
-}
-
-.app-navbar-logo-image {
-  display: block;
-  max-width: 100%;
-  width: auto;
-  max-height: 145px;
-  object-fit: contain;
-  filter: drop-shadow(0 6px 10px rgba(52, 57, 77, 0.12));
-}
-
-.app-navbar-logo-fallback {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 88px;
-  height: 88px;
-  border-radius: 999px;
-  border: 2px solid rgba(76, 99, 134, 0.28);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.62);
-  color: #29416c;
-  font-size: 1.55rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-}
-
-.app-navbar-title-wrap {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: 10px;
-  padding: 0 20px;
-  text-align: center;
-  flex-grow: 1;
-  margin-left: 380px;
-  margin-right: 20px;
-}
-
-.app-navbar-kicker {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 12px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.1);
-  color: rgba(255,255,255,0.82);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.app-navbar-title {
-  margin: 0;
-  color: var(--ched-gold);
-  font-size: clamp(1.4rem, 2.5vw, 2.4rem);
-  font-weight: 800;
-  line-height: 1.1;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
-}
-
-/* Sub Nav with Gold Border */
-.app-navbar-navrow {
-  background-color: var(--ched-dark-navy);
-  height: 50px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 calc((100vw - min(100vw, var(--app-navbar-max-width))) / 2 + 30px);
-  position: relative;
-  border-bottom: 4px solid var(--ched-gold);
-  margin: 0 calc((100vw - min(100vw, var(--app-navbar-max-width))) / -2);
-}
-
-.app-navbar-tabs {
-  display: flex;
-  align-items: flex-end;
-  height: 100%;
-}
-
-.app-navbar-link.is-active {
-  background-color: #FFF9E7;
-  color: #1A365D;
-  border: 1px solid var(--ched-gold);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  padding: 8px 25px;
-  font-weight: 700;
-  font-size: 0.9rem;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 40px;
-  align-self: flex-end;
-  margin-bottom: -4px;
-  text-decoration: none;
-}
-
-.app-navbar-account {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.status-badge {
-  color: white;
-  font-size: 0.85rem;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  background-color: #F6AD55;
-  border-radius: 50%;
-  box-shadow: 0 0 5px #F6AD55;
-}
-
-.app-navbar-account-name {
-  min-height: 24px;
-  color: #ffffff;
-  font-size: 1rem;
-  font-weight: 600;
-  line-height: 1.25;
-}
-
-.account-name-loading {
-  color: rgba(255,255,255,0.88);
-}
-
-.account-name-loading .spinner-border {
-  color: rgba(255,255,255,0.92);
-}
-
-.app-navbar-tabs {
-  display: flex;
-  gap: 10px;
-}
-
-.app-navbar-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 140px;
-  padding: 15px 22px;
-  border-radius: 16px 16px 0 0;
-  background: rgba(13, 34, 83, 0.92);
-  color: rgba(255,255,255,0.92);
-  font-size: 1rem;
-  font-weight: 700;
-  text-decoration: none;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
-  transition: background-color 0.2s ease, transform 0.2s ease, color 0.2s ease;
-}
-
-.app-navbar-link i {
-  font-size: 1rem;
-}
-
-.app-navbar-link:hover,
-.app-navbar-link:focus-visible {
-  color: #fff;
-  background: rgba(10, 29, 72, 0.98);
-  transform: translateY(-1px);
-}
-
 
 .search-filter-card,
 .report-header-card,
@@ -481,18 +135,6 @@ body {
   gap: 18px;
 }
 
-.report-inline-loading {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  align-self: flex-start;
-  padding: 10px 14px;
-  border-radius: 999px;
-  background: #e8eef9;
-  color: var(--primary);
-  font-size: 0.95rem;
-  font-weight: 700;
-}
 
 .report-header-card {
   position: relative;
@@ -1617,8 +1259,10 @@ body {
   display: flex;
   flex-direction: column;
   border: 0;
-  border-radius: 22px;
-  box-shadow: 0 22px 54px rgba(15, 23, 42, 0.18);
+  border-radius: 24px;
+  box-shadow: 0 2px 8px rgba(11, 29, 55, 0.06);
+  border: 1px solid rgba(11, 29, 55, 0.06);
+  background: white;
 }
 
 .analytics-modal-wide {
@@ -1629,8 +1273,12 @@ body {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: #fff;
-  border-bottom: 1px solid #e2e8f0;
+  background: white;
+  border-bottom: 1px solid rgba(11, 29, 55, 0.06);
+  padding: 24px 32px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .analytics-modal-body {
@@ -1671,10 +1319,36 @@ body {
   text-transform: uppercase;
 }
 
+/* Modal content cards - styled like dashboard cards */
+.analytics-modal .report-card {
+  background: white;
+  border-radius: 24px;
+  box-shadow: 0 2px 8px rgba(11, 29, 55, 0.06);
+  border: 1px solid rgba(11, 29, 55, 0.06);
+  padding: 24px;
+}
+
+.analytics-modal .report-card-header h3 {
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--text-strong);
+  margin: 0;
+}
+
 .modal-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 12px;
+}
+
+/* Summary cards inside modal */
+.modal-summary-grid > div,
+#detailModalSummary > div {
+  background: white;
+  border-radius: 24px;
+  box-shadow: 0 2px 8px rgba(11, 29, 55, 0.06);
+  border: 1px solid rgba(11, 29, 55, 0.06);
+  padding: 20px 24px;
 }
 
 .modal-records-scroller {
@@ -1696,6 +1370,93 @@ body {
   gap: 20px;
   width: 100%;
   margin-top: 24px;
+}
+
+/* Modal chart styling matching main dashboard */
+.analytics-modal .top-programs,
+.analytics-modal .status-chart,
+.analytics-modal .status-progression,
+.analytics-modal .doc-locations {
+  min-height: 280px;
+}
+
+.analytics-modal .report-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.analytics-modal .bar-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.analytics-modal .bar-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  min-width: 140px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-modal .bar-track {
+  flex: 1;
+  height: 32px;
+  background: rgba(11, 29, 55, 0.06);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+}
+
+.analytics-modal .bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #1e3a8a, #3b82f6);
+  border-radius: 8px;
+  transition: width 0.5s ease;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 10px;
+}
+
+.analytics-modal .bar-value {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: white;
+}
+
+/* Application Status Trend in modal */
+#detailModalStatusTrend {
+  min-height: 220px;
+}
+
+/* Modal table styling */
+.analytics-modal .analytics-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.analytics-modal .analytics-table th {
+  background: rgba(11, 29, 55, 0.04);
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid rgba(11, 29, 55, 0.08);
+}
+
+.analytics-modal .analytics-table td {
+  padding: 12px 16px;
+  font-size: 0.9rem;
+  border-bottom: 1px solid rgba(11, 29, 55, 0.04);
+}
+
+.analytics-modal .analytics-table tr:hover td {
+  background: rgba(31, 66, 155, 0.04);
 }
 
 /* First col (Application Status) = 40% */

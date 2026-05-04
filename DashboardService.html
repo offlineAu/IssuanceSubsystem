@@ -90,6 +90,10 @@ var Service = {
     this.runServerCall("getNavbarLogoData", [], onSuccess, onFailure);
   },
 
+  getAccountName: function(onSuccess) {
+    google.script.run.withSuccessHandler(onSuccess).getAccountName();
+  },
+
   loadRemainingDashboardData: function(filters, onSuccess, onFailure) {
     this.runServerCall("loadRemainingDashboardData", [filters], onSuccess, onFailure);
   },

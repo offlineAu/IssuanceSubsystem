@@ -66,20 +66,6 @@ body { font-family:'Inter',sans-serif; background-color:var(--bg-soft); overflow
   padding: 12px 16px;
 }
 
-.glass-nav { backdrop-filter: blur(12px); background-color:rgba(255,255,255,0.72); border-radius:1rem; box-shadow:0 4px 20px rgba(0,0,0,0.08); }
-.app-navbar {
-  padding-top: 14px !important;
-  padding-bottom: 14px !important;
-}
-
-.app-navbar-inner {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-}
-
 .app-brand {
   display: inline-flex;
   flex-direction: column;
@@ -897,11 +883,6 @@ th, td { text-align:center; overflow-wrap:break-word; min-width:120px; }
 }
 
 @media (max-width: 992px) {
-  .app-navbar-inner {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
   .welcome-card {
     align-items: center;
   }
@@ -956,11 +937,6 @@ th, td { text-align:center; overflow-wrap:break-word; min-width:120px; }
 @media (max-width: 767.98px) {
   html {
     scroll-padding-top: 84px;
-  }
-
-  .app-navbar {
-    padding-left: 16px !important;
-    padding-right: 16px !important;
   }
 
   .app-brand-title {
@@ -1079,22 +1055,6 @@ html {
 .page-shell {
   padding-top: 14px;
   padding-bottom: 18px;
-}
-
-.app-navbar {
-  padding-left: 14px !important;
-  padding-right: 14px !important;
-}
-
-.app-navbar-inner {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
-}
-
-.app-brand,
-.welcome-card {
-  width: 100%;
 }
 
 .welcome-card {
@@ -1257,18 +1217,6 @@ html {
     padding-bottom: 22px;
   }
 
-  .app-navbar {
-    padding-left: 20px !important;
-    padding-right: 20px !important;
-  }
-
-  .app-navbar-inner {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-  }
-
   .app-brand,
   .welcome-card {
     width: auto;
@@ -1343,11 +1291,6 @@ html {
   .page-shell {
     padding-top: 20px;
     padding-bottom: 24px;
-  }
-
-  .app-navbar {
-    padding-left: 24px !important;
-    padding-right: 24px !important;
   }
 
   .welcome-name {
@@ -1481,13 +1424,6 @@ body {
 
 .glass-nav {
   border-radius: 10px;
-}
-
-.app-navbar {
-  padding-top: 8px !important;
-  padding-bottom: 8px !important;
-  padding-left: 10px !important;
-  padding-right: 10px !important;
 }
 
 .app-brand,

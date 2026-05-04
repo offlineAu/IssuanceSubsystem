@@ -13,6 +13,7 @@
     <?!= include('DashboardStyles'); ?>
   </head>
   <body>
+    <?!= HtmlService.createHtmlOutputFromFile('Navbar').getContent(); ?>
     <script>
       // Global variable assignment for Dashboard module to maintain its standalone context
       var Model, Service, View, Controller;

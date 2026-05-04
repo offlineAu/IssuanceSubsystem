@@ -2464,7 +2464,7 @@ function normalizeDatePresetValue_(value) {
   var preset = toTrimmedString_(value) || "allTime";
   var validPresets = ["allTime", "thisYear", "yearToDate", "last30Days", "last90Days", "specificDate"];
   if (validPresets.indexOf(preset) !== -1) return preset;
-  return "allTime";
+  return "thisYear";
 }
 
 function normalizeDateValue_(value) {
@@ -2514,6 +2514,13 @@ function resolveDashboardDatePresetRange_(datePreset, dateFrom, dateTo) {
       dateTo: currentDateValue
     };
   }
+  if (datePreset === "specificDate") {
+    return {
+      dateFrom: normalizeDateValue_(dateFrom),
+      dateTo: normalizeDateValue_(dateTo)
+    };
+  }
+
 
   return { dateFrom: "", dateTo: "" };
 }
@@ -2538,32 +2545,48 @@ function normalizeFilters_(filters) {
 }
 
 function runBigQueryQuery_(query, queryParameters) {
-  if (typeof BigQuery === "undefined" || !BigQuery || !BigQuery.Jobs) {
-    throw new Error("BigQuery advanced service is not enabled in this Apps Script project.");
-  }
+  Logger.log("[RBQ] runBigQueryQuery_ called - FIXED VERSION");
+  var projectId = BIGQUERY_PROJECT_ID;
   var request = {
     query: query,
     useLegacySql: false,
-    location: BIGQUERY_LOCATION
+    parameterMode: "NAMED",
+    queryParameters: queryParameters || []
   };
-  if (queryParameters && queryParameters.length) {
-    request.parameterMode = "NAMED";
-    request.queryParameters = queryParameters;
+  try {
+    var queryResults = BigQuery.Jobs.query(request, projectId);
+    var jobId = queryResults.jobReference.jobId;
+
+    var attempts = 0;
+    while (!queryResults.jobComplete && attempts < 10) {
+      Utilities.sleep(500);
+      queryResults = BigQuery.Jobs.getQueryResults(projectId, jobId);
+      attempts += 1;
+    }
+
+    var rows = queryResults.rows || [];
+    while (queryResults.pageToken) {
+      queryResults = BigQuery.Jobs.getQueryResults(projectId, jobId, {
+        pageToken: queryResults.pageToken
+      });
+      rows = rows.concat(queryResults.rows || []);
+    }
+    return rows;
+  } catch (e) {
+    var msg = e.toString();
+    if (msg.indexOf("Not found") !== -1) throw new Error("404: Analytics dataset not found.");
+    if (msg.indexOf("Access Denied") !== -1) throw new Error("403: No BigQuery access.");
+    throw new Error("BigQuery Error: " + msg);
   }
-  var result = BigQuery.Jobs.query(request, BIGQUERY_PROJECT_ID);
-  while (!result.jobComplete) {
-    Utilities.sleep(500);
-    result = BigQuery.Jobs.getQueryResults(BIGQUERY_PROJECT_ID, result.jobReference.jobId, {
-      location: BIGQUERY_LOCATION
-    });
-  }
-  return result.rows || [];
 }
 
 function mapBigQueryRows_(rows, mapper) {
-  return (rows || []).map(function(row, index) {
-    var values = (row.f || []).map(function(cell) { return cell && cell.v != null ? cell.v : ""; });
-    return mapper(values, index);
+  if (!rows || !rows.length) return [];
+  return rows.map(function(row) {
+    var values = (row.f || []).map(function(field) {
+      return field && field.v != null ? field.v : "";
+    });
+    return mapper(values);
   });
 }
 
@@ -2599,13 +2622,28 @@ function buildBigQueryWhereClause_(filters, options) {
   var queryParameters = [];
   var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
 
-  if (!excludedFilters.program && normalizedFilters.program) {
-    queryParts.push("AND program = @program");
-    queryParameters.push(buildBigQueryNamedParameter_("program", "STRING", normalizedFilters.program));
+  // ES2/Program alignment: ensure filters respect ownership mapping
+  var programOwnershipMap = config.programOwnershipMap || {};
+  var effectiveProgram = normalizedFilters.program;
+  var effectiveEs2InCharge = normalizedFilters.es2InCharge;
+
+  // If both program and es2InCharge are selected, verify alignment
+  if (effectiveProgram && effectiveEs2InCharge && Object.keys(programOwnershipMap).length > 0) {
+    var expectedOwner = programOwnershipMap[effectiveProgram];
+    if (expectedOwner && expectedOwner !== effectiveEs2InCharge) {
+      // Misalignment: selected ES2 doesn't own the selected program
+      // Give precedence to program ownership (filter by program and its actual owner)
+      effectiveEs2InCharge = expectedOwner;
+    }
   }
-  if (!excludedFilters.es2InCharge && normalizedFilters.es2InCharge) {
+
+  if (!excludedFilters.program && effectiveProgram) {
+    queryParts.push("AND program = @program");
+    queryParameters.push(buildBigQueryNamedParameter_("program", "STRING", effectiveProgram));
+  }
+  if (!excludedFilters.es2InCharge && effectiveEs2InCharge) {
     queryParts.push("AND es2InCharge = @es2InCharge");
-    queryParameters.push(buildBigQueryNamedParameter_("es2InCharge", "STRING", normalizedFilters.es2InCharge));
+    queryParameters.push(buildBigQueryNamedParameter_("es2InCharge", "STRING", effectiveEs2InCharge));
   }
   if (!excludedFilters.applicationStatus && normalizedFilters.applicationStatus) {
     var canonicalStatus = normalizeDashboardStatus_(normalizedFilters.applicationStatus) || normalizedFilters.applicationStatus;
@@ -2726,12 +2764,22 @@ function buildDashboardWhereClause_(filters, options) {
   var normalizedFilters = filterSpec.normalizedFilters;
   var clause = filterSpec.whereClause;
 
+  // Extract aligned ES2 value from queryParameters (ES2/Program alignment may have modified it)
+  var effectiveEs2InCharge = normalizedFilters.es2InCharge;
+  for (var pi = 0; pi < filterSpec.queryParameters.length; pi++) {
+    var p = filterSpec.queryParameters[pi];
+    if (p.name === "es2InCharge" && p.parameterValue && p.parameterValue.value) {
+      effectiveEs2InCharge = p.parameterValue.value;
+      break;
+    }
+  }
+
   // Replace named parameters with actual values for backward compatibility
   if (normalizedFilters.program) {
     clause = clause.replace("@program", "'" + normalizedFilters.program.replace(/'/g, "\\'") + "'");
   }
-  if (normalizedFilters.es2InCharge) {
-    clause = clause.replace("@es2InCharge", "'" + normalizedFilters.es2InCharge.replace(/'/g, "\\'") + "'");
+  if (effectiveEs2InCharge) {
+    clause = clause.replace("@es2InCharge", "'" + effectiveEs2InCharge.replace(/'/g, "\\'") + "'");
   }
   if (normalizedFilters.applicationStatus) {
     var status = normalizeDashboardStatus_(normalizedFilters.applicationStatus) || normalizedFilters.applicationStatus;
@@ -2754,9 +2802,9 @@ function buildDashboardWhereClause_(filters, options) {
   return clause.replace(/^WHERE /, "");
 }
 
-function getDashboardSummary_(filters) {
+function getDashboardSummary_(filters, options) {
   var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
-  var whereClause = buildDashboardWhereClause_(filters);
+  var whereClause = buildDashboardWhereClause_(filters, options);
   var result = runDashboardBigQueryOverSources_(function(source) {
     return [
       "SELECT",
@@ -2794,9 +2842,9 @@ function getDashboardSummary_(filters) {
   };
 }
 
-function getDashboardStatusDistribution_(filters) {
+function getDashboardStatusDistribution_(filters, options) {
   var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
-  var whereClause = buildDashboardWhereClause_(filters);
+  var whereClause = buildDashboardWhereClause_(filters, options);
   var result = runDashboardBigQueryOverSources_(function(source) {
     return [
       "SELECT",
@@ -2819,9 +2867,9 @@ function getDashboardStatusDistribution_(filters) {
   };
 }
 
-function getDashboardWorkloadSummary_(filters) {
+function getDashboardWorkloadSummary_(filters, options) {
   var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
-  var whereClause = buildDashboardWhereClause_(filters);
+  var whereClause = buildDashboardWhereClause_(filters, options);
   var result = runDashboardBigQueryOverSources_(function(source) {
     return [
       "SELECT",
@@ -2851,8 +2899,8 @@ function getDashboardWorkloadSummary_(filters) {
   };
 }
 
-function getDashboardTopPrograms_(filters) {
-  var whereClause = buildDashboardWhereClause_(filters);
+function getDashboardTopPrograms_(filters, options) {
+  var whereClause = buildDashboardWhereClause_(filters, options);
   Logger.log("[TOP PROGRAMS] whereClause: " + whereClause);
   Logger.log("[TOP PROGRAMS] Filters received: " + JSON.stringify(filters));
   try {
@@ -2893,8 +2941,8 @@ function getDashboardTopPrograms_(filters) {
   }
 }
 
-function getDashboardLocationLoad_(filters) {
-  var whereClause = buildDashboardWhereClause_(filters);
+function getDashboardLocationLoad_(filters, options) {
+  var whereClause = buildDashboardWhereClause_(filters, options);
   var result = runDashboardBigQueryOverSources_(function(source) {
     return [
       "SELECT",
@@ -2917,8 +2965,8 @@ function getDashboardLocationLoad_(filters) {
   };
 }
 
-function getDashboardMonthlyVolume_(filters) {
-  var whereClause = buildDashboardWhereClause_(filters);
+function getDashboardMonthlyVolume_(filters, options) {
+  var whereClause = buildDashboardWhereClause_(filters, options);
   Logger.log("[MONTHLY] whereClause: " + whereClause);
   try {
     var result = runDashboardBigQueryOverSources_(function(source) {
@@ -2952,8 +3000,64 @@ function getDashboardMonthlyVolume_(filters) {
   }
 }
 
-function getDashboardSlaRows_(filters) {
-  var whereClause = buildDashboardWhereClause_(filters);
+function getDashboardMonthlyTrend_(filters, options) {
+  var whereClause = buildDashboardWhereClause_(filters, options);
+  Logger.log("[TREND] whereClause: " + whereClause);
+  try {
+    var result = runDashboardBigQueryOverSources_(function(source) {
+      var query = [
+        "SELECT",
+        "  FORMAT_DATE('%Y-%m', dateReceivedDate) AS monthKey,",
+        "  FORMAT_DATE('%b %Y', dateReceivedDate) AS monthLabel,",
+        "  SUM(CASE WHEN canonicalStatus = 'For Evaluation' THEN 1 ELSE 0 END) AS forEvaluation,",
+        "  SUM(CASE WHEN canonicalStatus = 'Evaluated' THEN 1 ELSE 0 END) AS evaluated,",
+        "  SUM(CASE WHEN canonicalStatus = 'Deficiency' THEN 1 ELSE 0 END) AS deficiency,",
+        "  SUM(CASE WHEN canonicalStatus = 'Approved' THEN 1 ELSE 0 END) AS approved,",
+        "  SUM(CASE WHEN canonicalStatus = 'Verified' THEN 1 ELSE 0 END) AS verified,",
+        "  SUM(CASE WHEN canonicalStatus = 'For Signature' THEN 1 ELSE 0 END) AS forSignature,",
+        "  SUM(CASE WHEN canonicalStatus = 'For Release' THEN 1 ELSE 0 END) AS forRelease,",
+        "  SUM(CASE WHEN canonicalStatus = 'Released' THEN 1 ELSE 0 END) AS released,",
+        "  SUM(CASE WHEN canonicalStatus = 'Cancelled' THEN 1 ELSE 0 END) AS cancelled,",
+        "  COUNT(*) AS total",
+        "FROM " + source,
+        "WHERE " + whereClause,
+        "AND dateReceivedDate IS NOT NULL",
+        "GROUP BY monthKey, monthLabel",
+        "ORDER BY monthKey ASC"
+      ].join("\n");
+      Logger.log("[TREND] Query: " + query.substring(0, 300));
+      return query;
+    });
+    Logger.log("[TREND] Returned " + (result.rows ? result.rows.length : 0) + " rows");
+    
+    // Transform rows into status-keyed format for frontend
+    var statusKeys = ["forEvaluation", "evaluated", "deficiency", "approved", "verified", "forSignature", "forRelease", "released", "cancelled", "total"];
+    var monthlyData = {};
+    
+    statusKeys.forEach(function(key) {
+      monthlyData[key] = result.rows.map(function(row) {
+        var values = row.f || [];
+        var keyIndex = statusKeys.indexOf(key) + 2; // Skip monthKey (0) and monthLabel (1)
+        return Number(values[keyIndex] && values[keyIndex].v || 0);
+      });
+    });
+    
+    return {
+      source: result.source,
+      months: result.rows.map(function(row) {
+        var values = row.f || [];
+        return String(values[1] && values[1].v || "");
+      }),
+      data: monthlyData
+    };
+  } catch (e) {
+    Logger.log("[TREND] ERROR: " + e.toString());
+    return { source: "error", months: [], data: {} };
+  }
+}
+
+function getDashboardSlaRows_(filters, options) {
+  var whereClause = buildDashboardWhereClause_(filters, options);
   Logger.log("[SLA] whereClause: " + whereClause);
   try {
     var result = runDashboardBigQueryOverSources_(function(source) {
@@ -2983,8 +3087,8 @@ function getDashboardSlaRows_(filters) {
   }
 }
 
-function getDashboardBacklogRows_(filters) {
-  var whereClause = buildDashboardWhereClause_(filters);
+function getDashboardBacklogRows_(filters, options) {
+  var whereClause = buildDashboardWhereClause_(filters, options);
   var result = runDashboardBigQueryOverSources_(function(source) {
     return [
       "SELECT",
@@ -3007,8 +3111,8 @@ function getDashboardBacklogRows_(filters) {
   };
 }
 
-function getDashboardProductivityRows_(filters) {
-  var whereClause = buildDashboardWhereClause_(filters);
+function getDashboardProductivityRows_(filters, options) {
+  var whereClause = buildDashboardWhereClause_(filters, options);
   Logger.log("[PRODUCTIVITY] whereClause: " + whereClause);
   try {
     var result = runDashboardBigQueryOverSources_(function(source) {
@@ -3050,11 +3154,9 @@ function getDashboardProductivityRows_(filters) {
   }
 }
 
-function getDashboardTurnaroundAnalytics_(filters) {
-  // Full Executive Dashboard implementation with multi-stage tracking and groups
+function getDashboardTurnaroundAnalytics(filters, options) {
   var turnaroundSource = getDashboardTurnaroundSource_();
-  var whereClause = buildDashboardWhereClause_(filters);
-  var holidayTableAvailable = true;
+  var whereClause = buildDashboardWhereClause_(filters, options);
   var holidayContextSql = "SELECT ARRAY_AGG(holidayDate) AS holidayDates FROM " + BIGQUERY_HOLIDAYS_TABLE;
   
   var stageDateExpressions = turnaroundSource.stageDateExpressions || {
@@ -3074,7 +3176,11 @@ function getDashboardTurnaroundAnalytics_(filters) {
   ];
   
   var businessDayExpressions = {
-    total: buildBusinessDayCountSql_("orderedDates[OFFSET(0)]", "orderedDates[OFFSET(ARRAY_LENGTH(orderedDates) - 1)]", "holidayDates"),
+    total: buildBusinessDayCountSql_(
+      "CASE WHEN ARRAY_LENGTH(orderedDates) >= 2 THEN orderedDates[OFFSET(0)] ELSE NULL END",
+      "CASE WHEN ARRAY_LENGTH(orderedDates) >= 2 THEN orderedDates[OFFSET(ARRAY_LENGTH(orderedDates) - 1)] ELSE NULL END",
+      "holidayDates"
+    ),
     dateToVerification: buildBusinessDayCountSql_("dateReceivedDate", "verificationDateReceived", "holidayDates"),
     verificationToIssuance: buildBusinessDayCountSql_("verificationDateReceived", "issuanceDateReceived", "holidayDates"),
     issuanceToDeficiency: buildBusinessDayCountSql_("issuanceDateReceived", "deficiencyDateReceived", "holidayDates"),
@@ -3082,156 +3188,149 @@ function getDashboardTurnaroundAnalytics_(filters) {
   };
   
   try {
-    var result = runDashboardBigQueryOverSources_(function(source) {
-      var effectiveSource = turnaroundSource.sourceRef || source;
-      
-      // Build transition select lines for prepared CTE
-      var transitionSelectLines = transitions.map(function(t) {
-        return "    " + businessDayExpressions[t.key] + " AS " + t.key;
-      });
-      
-      // Build transition summary lines for summary CTE
-      var transitionSummaryLines = transitions.map(function(t) {
-        return "    AVG(" + t.key + ") AS avg_" + t.key + ",\n    COUNT(" + t.key + ") AS count_" + t.key;
-      });
-      
-      // Build transition group lines for grouped CTE
-      var transitionGroupLines = transitions.map(function(t) {
-        return "    AVG(" + t.key + ") AS avg_" + t.key + ",\n    COUNT(" + t.key + ") AS count_" + t.key;
-      });
-      
-      // Build null placeholders for summary row
-      var transitionNullLines = transitions.map(function() {
-        return "  CAST(NULL AS FLOAT64),\n  CAST(NULL AS INT64)";
-      });
-      
-      // Build grouped transition queries for UNION ALL
-      var groupedTransitionQueries = transitions.map(function(t) {
-        return [
-          "SELECT",
-          "  'grouped-transition' AS rowType,",
-          "  evaluationStatus,",
-          "  '" + t.key + "' AS metricKey,",
-          "  CONCAT(evaluationStatus, ' - " + t.label.replace(/'/g, "''") + "') AS metricLabel,",
-          "  CAST(NULL AS INT64) AS eligibleRecordCount,",
-          "  CAST(NULL AS FLOAT64) AS averageTotalDays,",
-          "  CAST(NULL AS FLOAT64) AS medianTotalDays,",
-          transitionNullLines.join(",\n"),
-          ", statusCount,",
-          "  avg_" + t.key + " AS metricAverage,",
-          "  count_" + t.key + " AS metricSampleCount",
-          "FROM grouped"
-        ].join("\n");
-      });
-      
-      var query = [
-        "WITH holiday_context AS (",
-        "  " + holidayContextSql,
-        "), filtered AS (",
-        "  SELECT",
-        "    COALESCE(NULLIF(TRIM(" + evaluationStatusExpression + "), ''), 'Unspecified') AS evaluationStatus,",
-        "    " + stageDateExpressions.dateReceivedDate + " AS dateReceivedDate,",
-        "    " + stageDateExpressions.verificationDateReceived + " AS verificationDateReceived,",
-        "    " + stageDateExpressions.issuanceDateReceived + " AS issuanceDateReceived,",
-        "    " + stageDateExpressions.deficiencyDateReceived + " AS deficiencyDateReceived,",
-        "    " + stageDateExpressions.releaseDateReceived + " AS releaseDateReceived,",
-        "    holidayDates",
-        "  FROM " + effectiveSource,
-        "  CROSS JOIN holiday_context",
-        "  WHERE " + whereClause,
-        "), prepared AS (",
-        "  SELECT",
-        "    evaluationStatus,",
-        "    orderedDates,",
-        "    holidayDates,",
-        "    ARRAY_LENGTH(orderedDates) AS nonNullStageCount,",
-        "    " + businessDayExpressions.total + " AS totalTurnaroundDays,",
-        transitionSelectLines.join(",\n"),
-        "  FROM (",
-        "    SELECT",
-        "      evaluationStatus,",
-        "      holidayDates,",
-        "      ARRAY(",
-        "        SELECT stageDate",
-        "        FROM UNNEST([dateReceivedDate, verificationDateReceived, issuanceDateReceived, deficiencyDateReceived, releaseDateReceived]) AS stageDate",
-        "        WHERE stageDate IS NOT NULL",
-        "        ORDER BY stageDate",
-        "      ) AS orderedDates,",
-        "      dateReceivedDate,",
-        "      verificationDateReceived,",
-        "      issuanceDateReceived,",
-        "      deficiencyDateReceived,",
-        "      releaseDateReceived",
-        "    FROM filtered",
-        "  )",
-        "), eligible AS (",
-        "  SELECT *",
-        "  FROM prepared",
-        "  WHERE nonNullStageCount >= 2",
-        "), summary AS (",
-        "  SELECT",
-        "    COUNT(*) AS eligibleRecordCount,",
-        "    AVG(totalTurnaroundDays) AS averageTotalDays,",
-        "    APPROX_QUANTILES(totalTurnaroundDays, 100)[OFFSET(50)] AS medianTotalDays,",
-        transitionSummaryLines.join(",\n"),
-        "  FROM eligible",
-        "), grouped AS (",
-        "  SELECT",
-        "    evaluationStatus,",
-        "    COUNT(*) AS statusCount,",
-        "    AVG(totalTurnaroundDays) AS avgTotalDays,",
-        transitionGroupLines.join(",\n"),
-        "  FROM eligible",
-        "  GROUP BY evaluationStatus",
-        ")",
+    var effectiveSource = turnaroundSource.sourceRef || BIGQUERY_NATIVE_REPORTING_VIEW;
+
+    var transitionSelectLines = transitions.map(function(t) {
+      return "    " + businessDayExpressions[t.key] + " AS " + t.key;
+    });
+    
+    var transitionSummaryLines = transitions.map(function(t) {
+      return "    AVG(" + t.key + ") AS avg_" + t.key + ",\n    COUNT(" + t.key + ") AS count_" + t.key;
+    });
+    
+    var transitionGroupLines = transitions.map(function(t) {
+      return "    AVG(" + t.key + ") AS avg_" + t.key + ",\n    COUNT(" + t.key + ") AS count_" + t.key;
+    });
+    
+    var transitionNullLines = transitions.map(function() {
+      return "  CAST(NULL AS FLOAT64),\n  CAST(NULL AS INT64)";
+    });
+    
+    var groupedTransitionQueries = transitions.map(function(t) {
+      return [
         "SELECT",
-        "  'summary' AS rowType,",
-        "  CAST(NULL AS STRING) AS evaluationStatus,",
-        "  CAST(NULL AS STRING) AS metricKey,",
-        "  CAST(NULL AS STRING) AS metricLabel,",
-        "  eligibleRecordCount,",
-        "  averageTotalDays,",
-        "  medianTotalDays,",
-        transitionNullLines.join(",\n"),
-        ", CAST(NULL AS INT64) AS statusCount,",
-        "  CAST(NULL AS FLOAT64) AS metricAverage,",
-        "  CAST(NULL AS INT64) AS metricSampleCount",
-        "FROM summary",
-        "UNION ALL",
-        "SELECT",
-        "  'grouped-total' AS rowType,",
+        "  'grouped-transition' AS rowType,",
         "  evaluationStatus,",
-        "  'total' AS metricKey,",
-        "  CONCAT(evaluationStatus, ' - Total Turnaround') AS metricLabel,",
+        "  '" + t.key + "' AS metricKey,",
+        "  CONCAT(evaluationStatus, ' - " + t.label.replace(/'/g, "''") + "') AS metricLabel,",
         "  CAST(NULL AS INT64) AS eligibleRecordCount,",
         "  CAST(NULL AS FLOAT64) AS averageTotalDays,",
         "  CAST(NULL AS FLOAT64) AS medianTotalDays,",
         transitionNullLines.join(",\n"),
         ", statusCount,",
-        "  avgTotalDays AS metricAverage,",
-        "  statusCount AS metricSampleCount",
-        "FROM grouped",
-        "UNION ALL",
-        groupedTransitionQueries.join("\nUNION ALL\n")
+        "  avg_" + t.key + " AS metricAverage,",
+        "  count_" + t.key + " AS metricSampleCount",
+        "FROM grouped"
       ].join("\n");
-      
-      Logger.log("[TURNAROUND] Query length: " + query.length);
-      return query;
     });
-    
-    Logger.log("[TURNAROUND] Returned " + (result.rows ? result.rows.length : 0) + " rows");
-    
-    if (!result.rows || result.rows.length === 0) {
+
+    var turnaroundQuery = [
+      "WITH holiday_context AS (",
+      "  " + holidayContextSql,
+      "), filtered AS (",
+      "  SELECT",
+      "    COALESCE(NULLIF(TRIM(INITCAP(LOWER(" + evaluationStatusExpression + "))), ''), 'Unspecified') AS evaluationStatus,",
+      "    " + stageDateExpressions.dateReceivedDate + " AS dateReceivedDate,",
+      "    " + stageDateExpressions.verificationDateReceived + " AS verificationDateReceived,",
+      "    " + stageDateExpressions.issuanceDateReceived + " AS issuanceDateReceived,",
+      "    " + stageDateExpressions.deficiencyDateReceived + " AS deficiencyDateReceived,",
+      "    " + stageDateExpressions.releaseDateReceived + " AS releaseDateReceived,",
+      "    holidayDates",
+      "  FROM " + effectiveSource,
+      "  CROSS JOIN holiday_context",
+      "  WHERE " + whereClause,
+      "), prepared AS (",
+      "  SELECT",
+      "    evaluationStatus,",
+      "    orderedDates,",
+      "    holidayDates,",
+      "    ARRAY_LENGTH(orderedDates) AS nonNullStageCount,",
+      "    " + businessDayExpressions.total + " AS totalTurnaroundDays,",
+      transitionSelectLines.join(",\n"),
+      "  FROM (",
+      "    SELECT",
+      "      evaluationStatus,",
+      "      holidayDates,",
+      "      ARRAY(",
+      "        SELECT stageDate",
+      "        FROM UNNEST([dateReceivedDate, verificationDateReceived, issuanceDateReceived, deficiencyDateReceived, releaseDateReceived]) AS stageDate",
+      "        WHERE stageDate IS NOT NULL",
+      "        ORDER BY stageDate",
+      "      ) AS orderedDates,",
+      "      dateReceivedDate,",
+      "      verificationDateReceived,",
+      "      issuanceDateReceived,",
+      "      deficiencyDateReceived,",
+      "      releaseDateReceived",
+      "    FROM filtered",
+      "  )",
+      "), eligible AS (",
+      "  SELECT *",
+      "  FROM prepared",
+      "  WHERE nonNullStageCount >= 2",
+      "), summary AS (",
+      "  SELECT",
+      "    COUNT(*) AS eligibleRecordCount,",
+      "    AVG(totalTurnaroundDays) AS averageTotalDays,",
+      "    APPROX_QUANTILES(totalTurnaroundDays, 100)[OFFSET(50)] AS medianTotalDays,",
+      transitionSummaryLines.join(",\n"),
+      "  FROM eligible",
+      "), grouped AS (",
+      "  SELECT",
+      "    evaluationStatus,",
+      "    COUNT(*) AS statusCount,",
+      "    AVG(totalTurnaroundDays) AS avgTotalDays,",
+      transitionGroupLines.join(",\n"),
+      "  FROM eligible",
+      "  GROUP BY evaluationStatus",
+      ")",
+      "SELECT",
+      "  'summary' AS rowType,",
+      "  CAST(NULL AS STRING) AS evaluationStatus,",
+      "  CAST(NULL AS STRING) AS metricKey,",
+      "  CAST(NULL AS STRING) AS metricLabel,",
+      "  eligibleRecordCount,",
+      "  averageTotalDays,",
+      "  medianTotalDays,",
+      transitionNullLines.join(",\n"),
+      ", CAST(NULL AS INT64) AS statusCount,",
+      "  CAST(NULL AS FLOAT64) AS metricAverage,",
+      "  CAST(NULL AS INT64) AS metricSampleCount",
+      "FROM summary",
+      "UNION ALL",
+      "SELECT",
+      "  'grouped-total' AS rowType,",
+      "  evaluationStatus,",
+      "  'total' AS metricKey,",
+      "  CONCAT(evaluationStatus, ' - Total Turnaround') AS metricLabel,",
+      "  CAST(NULL AS INT64) AS eligibleRecordCount,",
+      "  CAST(NULL AS FLOAT64) AS averageTotalDays,",
+      "  CAST(NULL AS FLOAT64) AS medianTotalDays,",
+      transitionNullLines.join(",\n"),
+      ", statusCount,",
+      "  avgTotalDays AS metricAverage,",
+      "  statusCount AS metricSampleCount",
+      "FROM grouped",
+      "UNION ALL",
+      groupedTransitionQueries.join("\nUNION ALL\n")
+    ].join("\n");
+
+    Logger.log("[TURNAROUND] Query length: " + turnaroundQuery.length);
+
+    var rawRows = runBigQueryJobAsync_(turnaroundQuery);
+
+    Logger.log("[TURNAROUND] Returned " + rawRows.length + " rows");
+
+    if (!rawRows.length) {
       return {
-        source: result.source,
+        source: effectiveSource,
         summary: { eligibleRecordCount: 0, averageTotalDays: 0, medianTotalDays: 0 },
         highlights: [],
         groups: []
       };
     }
-    
-    // Parse all rows
-    var parsedRows = result.rows.map(function(row) {
+
+    var parsedRows = rawRows.map(function(row) {
       var values = row.f || [];
       return {
         rowType: String(values[0] ? values[0].v : ""),
@@ -3254,8 +3353,7 @@ function getDashboardTurnaroundAnalytics_(filters) {
         metricSampleCount: Number(values[17] ? values[17].v : 0)
       };
     });
-    
-    // Extract summary row (ES5 compatible)
+
     var summaryRow = { eligibleRecordCount: 0, averageTotalDays: 0, medianTotalDays: 0 };
     for (var i = 0; i < parsedRows.length; i++) {
       if (parsedRows[i].rowType === "summary") {
@@ -3263,14 +3361,13 @@ function getDashboardTurnaroundAnalytics_(filters) {
         break;
       }
     }
-    
+
     var summary = {
       eligibleRecordCount: summaryRow.eligibleRecordCount,
       averageTotalDays: summaryRow.averageTotalDays,
-      medianTotalDays: summaryRow.medianTotalDays
+      medianTotalDays: summaryRow.medianTotalDays,
     };
-    
-    // Build highlights from summary row transitions
+
     var highlights = [];
     var transitionData = [
       { key: "dateToVerification", label: "Date Received -> Verification", avg: summaryRow.avgDateToVerification, count: summaryRow.countDateToVerification },
@@ -3278,7 +3375,7 @@ function getDashboardTurnaroundAnalytics_(filters) {
       { key: "issuanceToDeficiency", label: "Issuance -> Deficiency", avg: summaryRow.avgIssuanceToDeficiency, count: summaryRow.countIssuanceToDeficiency },
       { key: "deficiencyToRelease", label: "Deficiency -> Release", avg: summaryRow.avgDeficiencyToRelease, count: summaryRow.countDeficiencyToRelease }
     ];
-    
+
     transitionData.forEach(function(t) {
       if (t.count > 0) {
         highlights.push({
@@ -3290,27 +3387,20 @@ function getDashboardTurnaroundAnalytics_(filters) {
         });
       }
     });
-    
-    // Build groups from grouped rows
+
     var groupedMetrics = parsedRows.filter(function(r) {
       return r.rowType === "grouped-total" || r.rowType === "grouped-transition";
     });
-    
+
     var groupsMap = {};
     groupedMetrics.forEach(function(row) {
       var status = row.evaluationStatus || "Unspecified";
       if (!groupsMap[status]) {
-        groupsMap[status] = {
-          label: status,
-          sampleCount: 0,
-          metrics: []
-        };
+        groupsMap[status] = { label: status, sampleCount: 0, metrics: [] };
       }
-      
       var metricAvg = row.metricAverage || 0;
       var metricCount = row.metricSampleCount || 0;
       if (metricCount <= 0 || metricAvg <= 0) return;
-      
       if (row.metricKey === "total") {
         groupsMap[status].sampleCount = Math.max(groupsMap[status].sampleCount, metricCount);
         groupsMap[status].metrics.unshift({
@@ -3321,7 +3411,6 @@ function getDashboardTurnaroundAnalytics_(filters) {
           isTotal: true
         });
       } else {
-        // ES5 compatible find
         var transition = null;
         for (var tIdx = 0; tIdx < transitions.length; tIdx++) {
           if (transitions[tIdx].key === row.metricKey) {
@@ -3341,19 +3430,68 @@ function getDashboardTurnaroundAnalytics_(filters) {
         }
       }
     });
-    
-    // Convert groups map to array (ES5 compatible), sorted by sample count
-    var groups = Object.keys(groupsMap).map(function(key) { return groupsMap[key]; }).sort(function(a, b) {
+
+    var groups = Object.keys(groupsMap).map(function(key) {
+      return groupsMap[key];
+    }).sort(function(a, b) {
       return b.sampleCount - a.sampleCount;
     });
+
+    // Largest Workload Status
+    var largestWorkloadGroup = { label: "", sampleCount: 0, metrics: [] };
+    var foundLargest = false;
+    for (var g = 0; g < groups.length; g++) {
+      if (!foundLargest || groups[g].sampleCount > largestWorkloadGroup.sampleCount) {
+        largestWorkloadGroup = groups[g];
+        foundLargest = true;
+      }
+    }
+
+    // 3. Slowest transition - find from highlights first, then fall back to group metrics
+    var slowestTransition = { label: "", avg: 0, count: 0, key: "" };
+    var foundSlowest = false;
     
+    // Search in highlights first
+    for (var hi = 0; hi < highlights.length; hi++) {
+      var h = highlights[hi];
+      if (h.avgDays > 0 && h.sampleCount > 0 && (!foundSlowest || h.avgDays > slowestTransition.avg)) {
+        slowestTransition = { label: h.label, avg: h.avgDays, count: h.sampleCount, key: h.label };
+        foundSlowest = true;
+      }
+    }
+    
+    // If not found in highlights, search in group metrics (transitions)
+    if (!foundSlowest) {
+      for (var gi = 0; gi < groups.length; gi++) {
+        var grp = groups[gi];
+        for (var mi = 0; mi < grp.metrics.length; mi++) {
+          var m = grp.metrics[mi];
+          if (m.averageDays > 0 && !m.isTotal && (!foundSlowest || m.averageDays > slowestTransition.avg)) {
+            slowestTransition = { 
+              label: grp.label + " → " + m.label, 
+              avg: m.averageDays, 
+              count: m.sampleCount, 
+              key: m.key 
+            };
+            foundSlowest = true;
+          }
+        }
+      }
+    }
+
+    // Patch summary with derived fields now that groups and transitions are resolved
+    summary.largestWorkloadStatus = foundLargest ? largestWorkloadGroup.label : "—";
+    summary.largestWorkloadCount = foundLargest ? largestWorkloadGroup.sampleCount : 0;
+    summary.slowestTransitionLabel = foundSlowest ? slowestTransition.label : "—";
+    summary.slowestTransitionAvg = foundSlowest ? slowestTransition.avg : 0;
+
     return {
-      source: result.source,
+      source: effectiveSource,
       summary: summary,
       highlights: highlights,
       groups: groups
     };
-    
+
   } catch (e) {
     Logger.log("[TURNAROUND] ERROR: " + e.toString());
     return {
@@ -3363,6 +3501,60 @@ function getDashboardTurnaroundAnalytics_(filters) {
       groups: []
     };
   }
+}
+
+function runBigQueryJobAsync_(query) {
+  var jobResource = {
+    configuration: {
+      query: {
+        query: query,
+        useLegacySql: false
+      }
+    }
+  };
+  
+  var job = BigQuery.Jobs.insert(jobResource, BIGQUERY_PROJECT_ID);
+  var jobId = job.jobReference.jobId;
+  var location = job.jobReference.location || BIGQUERY_LOCATION;
+  
+  Logger.log("[ASYNC JOB] Started jobId: " + jobId);
+  
+  var attempts = 0;
+  var maxAttempts = 30;
+  while (attempts < maxAttempts) {
+    Utilities.sleep(1000);
+    var status = BigQuery.Jobs.get(BIGQUERY_PROJECT_ID, jobId, { location: location });
+    var state = status.status && status.status.state;
+    Logger.log("[ASYNC JOB] Attempt " + attempts + " state: " + state);
+    
+    if (state === "DONE") {
+      if (status.status.errorResult) {
+        throw new Error("BigQuery job failed: " + JSON.stringify(status.status.errorResult));
+      }
+      break;
+    }
+    attempts += 1;
+  }
+  
+  if (attempts >= maxAttempts) {
+    throw new Error("BigQuery job timed out after " + maxAttempts + " seconds.");
+  }
+  
+  // Collect all pages of results
+  var rows = [];
+  var pageToken = null;
+  do {
+    var queryParams = { location: location, maxResults: 10000 };
+    if (pageToken) queryParams.pageToken = pageToken;
+    var resultPage = BigQuery.Jobs.getQueryResults(BIGQUERY_PROJECT_ID, jobId, queryParams);
+    if (resultPage.rows) {
+      rows = rows.concat(resultPage.rows);
+    }
+    pageToken = resultPage.pageToken || null;
+  } while (pageToken);
+  
+  Logger.log("[ASYNC JOB] Complete. Total rows: " + rows.length);
+  return rows;
 }
 
 // Turnaround Analytics helper functions (from Executive Dashboard)
@@ -3715,8 +3907,15 @@ function dashboard_fetchData_(payload) {
   
   Logger.log("[FETCH] Raw payload received: " + JSON.stringify(rawFilters));
   
+  // Extract programOwnershipMap from payload for ES2/Program alignment
+  var programOwnershipMap = rawFilters.programOwnershipMap || {};
+  Logger.log("[FETCH] programOwnershipMap entries: " + Object.keys(programOwnershipMap).length);
+  
   // Normalize filters using Executive Dashboard logic (resolves date presets to actual dates)
   var filters = normalizeFilters_(rawFilters);
+  
+  // Build filter options with ownership map for alignment
+  var filterOptions = { programOwnershipMap: programOwnershipMap };
   
   Logger.log("[FETCH] Normalized filters: " + JSON.stringify(filters));
   Logger.log("[FETCH] es2InCharge value: '" + filters.es2InCharge + "' (length: " + (filters.es2InCharge ? filters.es2InCharge.length : 0) + ")");
@@ -3752,42 +3951,43 @@ function dashboard_fetchData_(payload) {
   
   Logger.log("[FETCH] Cache miss for key: " + cacheKey);
   
-  var summary, workload, status, turnaround, topPrograms, locationLoad, monthlyVolume, slaExposure, stageBacklog, productivity;
+  var summary, workload, status, turnaround, topPrograms, locationLoad, monthlyVolume, monthlyTrend, slaExposure, stageBacklog, productivity;
   
   try {
-    summary = getDashboardSummary_(filters);
-    workload = getDashboardWorkloadSummary_(filters);
-    status = getDashboardStatusDistribution_(filters);
-    turnaround = getDashboardTurnaroundAnalytics_(filters);
-    topPrograms = getDashboardTopPrograms_(filters);
-    locationLoad = getDashboardLocationLoad_(filters);
-    monthlyVolume = getDashboardMonthlyVolume_(filters);
-    slaExposure = getDashboardSlaRows_(filters);
-    stageBacklog = getDashboardBacklogRows_(filters);
-    productivity = getDashboardProductivityRows_(filters);
+    summary = getDashboardSummary_(filters, filterOptions);
+    workload = getDashboardWorkloadSummary_(filters, filterOptions);
+    status = getDashboardStatusDistribution_(filters, filterOptions);
+    turnaround = getDashboardTurnaroundAnalytics(filters, filterOptions);
+    topPrograms = getDashboardTopPrograms_(filters, filterOptions);
+    locationLoad = getDashboardLocationLoad_(filters, filterOptions);
+    monthlyVolume = getDashboardMonthlyVolume_(filters, filterOptions);
+    monthlyTrend = getDashboardMonthlyTrend_(filters, filterOptions);
+    slaExposure = getDashboardSlaRows_(filters, filterOptions);
+    stageBacklog = getDashboardBacklogRows_(filters, filterOptions);
+    productivity = getDashboardProductivityRows_(filters, filterOptions);
   } catch (e) {
     Logger.log("[FETCH] Critical error in sub-fetches: " + e.toString());
     // Continue with empty results rather than failing the whole request
   }
 
   // Build filter options from BigQuery (more reliable than Static sheet)
-  var filterOptions = getDashboardFilterOptionsFromBigQuery_();
+  var fetchedFilterOptions = getDashboardFilterOptionsFromBigQuery_();
   
   // Get available years for Monthly Volume filter
   var availableYears = getBigQueryAvailableYears_();
   Logger.log("[FETCH] Available years: " + availableYears.length);
   
-  Logger.log("[FETCH] Filter options from BigQuery: es2Owners=" + filterOptions.es2Owners.length + ", programs=" + filterOptions.programs.length);
+  Logger.log("[FETCH] Filter options from BigQuery: es2Owners=" + fetchedFilterOptions.es2Owners.length + ", programs=" + fetchedFilterOptions.programs.length);
 
   var response = {
     ok: true,
-    filters: filterOptions,
+    filters: fetchedFilterOptions,
     data: {
       records: [],
       availableYears: availableYears || [],
-      es2Owners: (filterOptions && filterOptions.es2Owners) || [],
-      es2ProgramMap: (filterOptions && filterOptions.es2ProgramMap) || {},
-      programOwnershipMap: (filterOptions && filterOptions.programOwnershipMap) || {}
+      es2Owners: (fetchedFilterOptions && fetchedFilterOptions.es2Owners) || [],
+      es2ProgramMap: (fetchedFilterOptions && fetchedFilterOptions.es2ProgramMap) || {},
+      programOwnershipMap: (fetchedFilterOptions && fetchedFilterOptions.programOwnershipMap) || {}
     },
     summary: {
       totalRecords: Number((summary && summary.values && summary.values.totalCount) || 0),
@@ -3812,7 +4012,12 @@ function dashboard_fetchData_(payload) {
       monthlyVolume: { title: "Monthly Application Volume", rows: (monthlyVolume && monthlyVolume.rows) || [] },
       slaExposure: { title: "SLA Exposure", rows: (slaExposure && slaExposure.rows) || [] },
       stageBacklog: { title: "Workflow Backlog", rows: (stageBacklog && stageBacklog.rows) || [] },
-      productivity: { title: "Assigned Staff Activity", rows: (productivity && productivity.rows) || [] }
+      productivity: { title: "Assigned Staff Activity", rows: (productivity && productivity.rows) || [] },
+      monthlyTrend: { 
+        title: "Application Status Trend", 
+        months: (monthlyTrend && monthlyTrend.months) || [],
+        data: (monthlyTrend && monthlyTrend.data) || {}
+      }
     },
     referenceData: {
       availableYears: availableYears || [],
@@ -3894,9 +4099,10 @@ function getDashboardFilterOptionsFromBigQuery_() {
     }).filter(function(v) { return v !== ""; });
 
     // Get distinct Application Statuses (without CAST)
+    // Get distinct Application Statuses - canonicalized
     var statusResult = runDashboardBigQueryOverSources_(function(source) {
       return [
-        "SELECT DISTINCT applicationStatus as value",
+        "SELECT DISTINCT " + getDashboardCanonicalStatusExpression_() + " AS value",
         "FROM " + source,
         "WHERE applicationStatus IS NOT NULL",
         "ORDER BY value"
@@ -3930,12 +4136,27 @@ function getDashboardFilterOptionsFromBigQuery_() {
 
     Logger.log("[FILTER_OPTIONS] Loaded from BigQuery: " + es2Owners.length + " ES2, " + programs.length + " Programs, " + applicationStatuses.length + " Statuses, " + Object.keys(programOwnershipMap).length + " ownership mappings");
 
+    // Add this HEI query
+    var heiResult = runDashboardBigQueryOverSources_(function(source) {
+      return [
+        "SELECT DISTINCT hei AS value",
+        "FROM " + source,
+        "WHERE hei IS NOT NULL AND TRIM(CAST(hei AS STRING)) != ''",
+        "ORDER BY value"
+      ].join("\n");
+    });
+    var heis = mapBigQueryRows_(heiResult.rows, function(values) {
+      return String(values[0] || "").trim();
+    }).filter(function(v) { return v !== ""; });
+
+    Logger.log("[FILTER_OPTIONS] HEIs loaded: " + heis.length);
+
     return {
       es2Owners: es2Owners,
       programs: programs,
       applicationStatuses: applicationStatuses,
       transactionTypes: ["Walk-In", "Online"],
-      heis: [],
+      heis: heis,
       dateRange: { min: "", max: "" },
       programOwnershipMap: programOwnershipMap,
       es2ProgramMap: es2ProgramMap
@@ -3963,12 +4184,16 @@ function dashboard_getDashboardDetail_(kind, name, filters, page, pageSize) {
   var pageSizeValue = Math.max(1, Math.min(100, parseInt(pageSize) || 25));
   // Normalize filters using same logic as main dashboard
   var currentFilters = normalizeFilters_(filters || {});
+  
+  // Extract programOwnershipMap from filters for ES2/Program alignment
+  var programOwnershipMap = (filters && filters.programOwnershipMap) || {};
+  var filterOptions = { programOwnershipMap: programOwnershipMap };
 
   Logger.log("[MODAL] Fetching detail for kind=" + normalizedKind + ", name=" + normalizedName + ", page=" + currentPage);
 
   try {
-    // Build WHERE clause based on kind
-    var whereClause = buildDashboardWhereClause_(currentFilters);
+    // Build WHERE clause based on kind (with ES2/Program alignment)
+    var whereClause = buildDashboardWhereClause_(currentFilters, filterOptions);
     var canonicalStatusExpression = getDashboardCanonicalStatusExpression_();
 
     // Add specific filter for the modal type (match Executive Dashboard approach)
@@ -4357,13 +4582,13 @@ function readWholeSheet_(sheet) {
   return sheet.getRange(1, 1, lastRow, lastCol).getValues();
 }
 
-function safelyGetBigQueryTotalCount_(filters) {
+function safelyGetBigQueryTotalCount_(filters, options) {
   try {
     var result = runDashboardBigQueryOverSources_(function(source) {
       return [
         "SELECT COUNT(1) AS total",
         "FROM " + source,
-        "WHERE " + buildDashboardWhereClause_(filters)
+        "WHERE " + buildDashboardWhereClause_(filters, options)
       ].join("\n");
     });
     return result.rows && result.rows.length > 0 ? Number(result.rows[0].f[0].v || 0) : 0;
@@ -5064,49 +5289,6 @@ function handleTypingRoute(action, payload) {
     default:
       return buildUnhandledRouteResponse_("typing", normalizedAction || String(action || ""), "Unknown typing action.");
   }
-}
-
-function runBigQueryQuery_(query, queryParameters) {
-  var projectId = "sodium-shard-459702-t9";
-  var request = {
-    query: query,
-    useLegacySql: false,
-    parameterMode: 'NAMED',
-    queryParameters: queryParameters || []
-  };
-  try {
-    var queryResults = BigQuery.Jobs.query(request, projectId);
-    var jobId = queryResults.jobReference.jobId;
-
-    while (!queryResults.jobComplete) {
-      Utilities.sleep(500);
-      queryResults = BigQuery.Jobs.getQueryResults(projectId, jobId);
-    }
-
-    var rows = queryResults.rows;
-    while (queryResults.pageToken) {
-      queryResults = BigQuery.Jobs.getQueryResults(projectId, jobId, {
-        pageToken: queryResults.pageToken
-      });
-      rows = rows.concat(queryResults.rows);
-    }
-    return rows || [];
-  } catch (e) {
-    var msg = e.toString();
-    if (msg.indexOf("Not found") !== -1) throw "404: Analytics dataset not found.";
-    if (msg.indexOf("Access Denied") !== -1) throw "403: No BigQuery access.";
-    throw "BigQuery Error: " + msg;
-  }
-}
-
-function mapBigQueryRows_(rows, mapper) {
-  if (!rows || !rows.length) return [];
-  return rows.map(function(row) {
-    var values = row.f.map(function(field) {
-      return field.v;
-    });
-    return mapper(values);
-  });
 }
 
 function handleDashboardRoute(action, payload) {
@@ -5896,6 +6078,220 @@ function normalizeRecord_(row, fieldIndexes, staticConfig, userDirectory, dataTy
 
 // ========== Reporting_Flat Rebuild Functions (Ported from Executive Dashboard) ==========
 
+function checkDatabaseHeaders() {
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetID);
+  const databaseSheet = spreadsheet.getSheetByName(databaseSheetName);
+  const headers = databaseSheet.getRange(1, 1, 1, 5).getValues()[0];
+  Logger.log("Database headers (first 5): " + JSON.stringify(headers));
+}
+
+function forceRebuildReportingFlat() {
+  // Delete and recreate sheet for truly fresh rebuild - prevents duplicates
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetID);
+  const reportingFlatSheet = spreadsheet.getSheetByName("Reporting_Flat");
+  if (reportingFlatSheet) {
+    spreadsheet.deleteSheet(reportingFlatSheet);
+    Logger.log("[FORCE REBUILD] Deleted old Reporting_Flat sheet");
+  }
+  // Clear any stale rebuild state
+  clearReportingFlatRebuildState_();
+  // Rebuild from scratch (will create new sheet with headers)
+  const result = rebuildReportingFlat();
+  Logger.log("[FORCE REBUILD] " + JSON.stringify(result));
+  return result;
+}
+
+function runCompleteRebuild() {
+  // Nuclear option: delete and recreate Reporting_Flat completely
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetID);
+  let reportingFlatSheet = spreadsheet.getSheetByName("Reporting_Flat");
+  
+  if (reportingFlatSheet) {
+    spreadsheet.deleteSheet(reportingFlatSheet);
+  }
+  
+  // Clear state
+  clearReportingFlatRebuildState_();
+  
+  // Run fresh rebuild (will create new sheet)
+  const result = rebuildReportingFlat();
+  
+  Logger.log("[COMPLETE REBUILD] " + JSON.stringify(result));
+  return result;
+}
+
+function smartRebuildReportingFlat() {
+  // Check current state and decide best approach
+  const diagnosis = diagnoseMissingRows();
+  
+  if (diagnosis.extraRows > 1000) {
+    // Significant duplicates - do complete rebuild
+    Logger.log("[SMART REBUILD] Found " + diagnosis.extraRows + " extra rows. Running complete rebuild.");
+    return runCompleteRebuild();
+  } else if (diagnosis.missingRows > 1000) {
+    // Missing significant data - resume or restart
+    const state = getReportingFlatRebuildState_();
+    if (state && state.nextSourceRow && state.nextSourceRow > 2) {
+      Logger.log("[SMART REBUILD] Missing " + diagnosis.missingRows + " rows. Resuming from row " + state.nextSourceRow);
+      return rebuildReportingFlat();
+    } else {
+      Logger.log("[SMART REBUILD] Missing " + diagnosis.missingRows + " rows. Starting fresh rebuild.");
+      return forceRebuildReportingFlat();
+    }
+  } else if (diagnosis.missingRows === 0 && diagnosis.extraRows === 0) {
+    Logger.log("[SMART REBUILD] Reporting_Flat is in sync with Database.");
+    return { ok: true, message: "Already in sync", diagnosis: diagnosis };
+  } else {
+    // Small drift - use force rebuild to avoid stale state issues
+    Logger.log("[SMART REBUILD] Small drift detected. Running force rebuild.");
+    return forceRebuildReportingFlat();
+  }
+}
+
+function diagnoseMissingRows() {
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetID);
+  const databaseSheet = mustGetSheet_(spreadsheet, databaseSheetName);
+  const reportingFlatSheet = spreadsheet.getSheetByName("Reporting_Flat");
+  
+  const dbRows = databaseSheet.getLastRow();
+  const rfRows = reportingFlatSheet ? reportingFlatSheet.getLastRow() : 0;
+  const missing = Math.max(0, dbRows - rfRows);
+  const extra = Math.max(0, rfRows - dbRows);
+  
+  Logger.log("[DIAGNOSE] Database rows: " + dbRows + ", Reporting_Flat rows: " + rfRows + ", Missing: " + missing + ", Extra: " + extra);
+  
+  return {
+    databaseRows: dbRows,
+    reportingFlatRows: rfRows,
+    headerRow: 1,
+    dataRowsDatabase: dbRows - 1,
+    dataRowsReportingFlat: Math.max(0, rfRows - 1),
+    missingRows: missing,
+    extraRows: extra,
+    percentComplete: dbRows > 1 ? Math.round(((rfRows - 1) / (dbRows - 1)) * 100) : 0
+  };
+}
+
+function removeDuplicatesFromReportingFlat() {
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetID);
+  const reportingFlatSheet = spreadsheet.getSheetByName("Reporting_Flat");
+  if (!reportingFlatSheet || reportingFlatSheet.getLastRow() <= 1) {
+    return { ok: true, removed: 0, message: "Sheet empty or not found" };
+  }
+  
+  const lastRow = reportingFlatSheet.getLastRow();
+  const lastColumn = reportingFlatSheet.getLastColumn();
+  
+  // Get all data
+  const allData = reportingFlatSheet.getRange(2, 1, lastRow - 1, lastColumn).getValues();
+  
+  // Find recordId column index (should be column 2, index 1)
+  const headers = reportingFlatSheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  const recordIdIndex = headers.indexOf("recordId");
+  
+  if (recordIdIndex === -1) {
+    return { ok: false, error: "recordId column not found" };
+  }
+  
+  // Track seen recordIds and duplicates
+  const seen = {};
+  const duplicates = []; // Row numbers to delete (1-indexed in sheet, starting from 2)
+  
+  for (var i = 0; i < allData.length; i++) {
+    const recordId = String(allData[i][recordIdIndex] || "").trim();
+    if (!recordId) continue;
+    
+    if (seen[recordId]) {
+      // Duplicate found - mark for deletion (actual sheet row = i + 2)
+      duplicates.push(i + 2);
+    } else {
+      seen[recordId] = true;
+    }
+  }
+  
+  // Delete duplicates from bottom to top (to avoid index shifting)
+  duplicates.reverse().forEach(function(rowNum) {
+    reportingFlatSheet.deleteRow(rowNum);
+  });
+  
+  Logger.log("[DEDUP] Removed " + duplicates.length + " duplicate rows");
+  
+  return {
+    ok: true,
+    removed: duplicates.length,
+    remaining: Object.keys(seen).length,
+    message: "Removed " + duplicates.length + " duplicates, kept " + Object.keys(seen).length + " unique records"
+  };
+}
+
+function rebuildReportingFlatOnEdit(e) {
+  // Lightweight version for onEdit trigger - just queues the rebuild
+  // to avoid timeout during edit
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== databaseSheetName) return;
+  
+  // Check if we should rebuild (avoid rebuilding on every cell edit)
+  const now = new Date().getTime();
+  const lastRebuild = PropertiesService.getScriptProperties().getProperty("last_onedit_rebuild");
+  const minInterval = 60000; // 1 minute minimum between rebuilds
+  
+  if (lastRebuild && (now - parseInt(lastRebuild)) < minInterval) {
+    Logger.log("[onEdit] Skipping rebuild - too soon since last rebuild");
+    return;
+  }
+  
+  PropertiesService.getScriptProperties().setProperty("last_onedit_rebuild", now.toString());
+  
+  // For onEdit, use smart rebuild to avoid data loss
+  Logger.log("[onEdit] Running smart rebuild after Database edit");
+  smartRebuildReportingFlat();
+}
+
+function findMissingRows() {
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetID);
+  const databaseSheet = spreadsheet.getSheetByName(databaseSheetName);
+  const reportingFlatSheet = spreadsheet.getSheetByName("Reporting_Flat");
+  
+  // Get all recordIds from Database (column A = recordId = index 1)
+  const dbData = databaseSheet.getRange(2, 1, databaseSheet.getLastRow() - 1, 1).getValues();
+  const dbRecordIds = dbData.map(function(row) { return String(row[0] || "").trim(); }).filter(function(id) { return id; });
+  
+  // Get all recordIds from Reporting_Flat (column B = recordId = index 2)
+  // Note: Column A in Reporting_Flat is _row (line number), not recordId
+  const rfData = reportingFlatSheet.getRange(2, 2, reportingFlatSheet.getLastRow() - 1, 1).getValues();
+  const rfRecordIds = rfData.map(function(row) { return String(row[0] || "").trim(); }).filter(function(id) { return id; });
+  
+  // Find missing (using plain object instead of Set for GAS compatibility)
+  // Convert all to strings for consistent comparison
+  const rfLookup = {};
+  for (var j = 0; j < rfRecordIds.length; j++) {
+    rfLookup[String(rfRecordIds[j])] = true;
+  }
+  const missing = dbRecordIds.filter(function(id) { return !rfLookup[String(id)]; });
+  
+  Logger.log("Database recordIds: " + dbRecordIds.length);
+  Logger.log("Reporting_Flat recordIds: " + rfRecordIds.length);
+  Logger.log("Missing recordIds: " + missing.length);
+  
+  if (missing.length > 0) {
+    Logger.log("Missing IDs: " + missing.join(", "));
+    
+    // Find the row numbers in Database
+    missing.forEach(function(id) {
+      for (var i = 0; i < dbData.length; i++) {
+        if (String(dbData[i][0] || "").trim() === id) {
+          Logger.log("Missing row in Database: Row " + (i + 2) + ", recordId: " + id);
+          // Show what's in that row
+          var rowData = databaseSheet.getRange(i + 2, 1, 1, 5).getValues()[0];
+          Logger.log("Row " + (i + 2) + " data: " + JSON.stringify(rowData));
+        }
+      }
+    });
+  }
+  
+  return { missing: missing, dbCount: dbRecordIds.length, rfCount: rfRecordIds.length };
+}
+
 function rebuildReportingFlat() {
   try {
     const spreadsheet = SpreadsheetApp.openById(spreadsheetID);
@@ -5938,23 +6334,43 @@ function rebuildReportingFlatBatched_(spreadsheet, databaseSheet, headers, total
   const userDirectory = buildUserDirectory_(usersData);
   const dataTypesConfig = buildDataTypesConfig_(dataTypesData);
   const sourceLastColumn = databaseSheet.getLastColumn();
+  
+  // Always reset state on fresh start (nextSourceRow would be 2 or state is null)
+  let nextSourceRow = state && state.nextSourceRow ? Number(state.nextSourceRow) : 2;
+  
+  // Validate state - if we've somehow gotten more rows than expected, reset
   const existingSheet = spreadsheet.getSheetByName("Reporting_Flat");
   const existingDataRows = existingSheet ? Math.max(0, existingSheet.getLastRow() - 1) : 0;
   
-  if ((existingDataRows === 0 && state && Number(state.nextSourceRow || 0) > 2) || !state) {
-    state = null;
+  // If state nextSourceRow doesn't match roughly where we should be, invalidate state
+  // (allows for some variance due to filtered/empty rows)
+  if (state && existingDataRows > 0) {
+    const expectedNextRow = existingDataRows + 2; // +1 for header, +1 for next row
+    const variance = Math.abs(nextSourceRow - expectedNextRow);
+    if (variance > DASHBOARD_FLAT_REBUILD_BATCH_SIZE * 2) {
+      Logger.log("[REBUILD] State mismatch detected. State says row " + nextSourceRow + 
+                 ", but Reporting_Flat has " + existingDataRows + " data rows. Resetting.");
+      state = null;
+      nextSourceRow = 2;
+    }
   }
   
-  let nextSourceRow = state && state.nextSourceRow ? Number(state.nextSourceRow) : 2;
   let processedRows = 0;
   let rowsWritten = 0;
+  let isFreshStart = !state || nextSourceRow <= 2;
   
-  ensureReportingFlatSheetInitialized_(spreadsheet, !state);
+  // Only reset sheet on fresh start
+  ensureReportingFlatSheetInitialized_(spreadsheet, isFreshStart);
+  
+  Logger.log("[REBUILD] Starting from row " + nextSourceRow + 
+             ", totalDataRows=" + totalDataRows + 
+             ", isFreshStart=" + isFreshStart);
   
   while (nextSourceRow <= totalDataRows + 1 && (new Date().getTime() - startedAt) < DASHBOARD_FLAT_REBUILD_EXECUTION_BUDGET_MS) {
     const remainingRows = (totalDataRows + 1) - nextSourceRow + 1;
     const batchRowCount = Math.min(DASHBOARD_FLAT_REBUILD_BATCH_SIZE, Math.max(0, remainingRows));
     if (!batchRowCount) break;
+    
     const batchValues = databaseSheet.getRange(nextSourceRow, 1, batchRowCount, sourceLastColumn).getValues();
     const flatRows = [];
     
@@ -5968,15 +6384,26 @@ function rebuildReportingFlatBatched_(spreadsheet, databaseSheet, headers, total
     rowsWritten += flatRows.length;
     processedRows += batchValues.length;
     nextSourceRow += batchValues.length;
+    
+    Logger.log("[REBUILD] Processed up to row " + nextSourceRow + 
+               ", written=" + rowsWritten + 
+               ", elapsed=" + (new Date().getTime() - startedAt) + "ms");
   }
   
   const complete = nextSourceRow > totalDataRows + 1;
+  
+  Logger.log("[REBUILD] Complete=" + complete + 
+             ", final nextSourceRow=" + nextSourceRow + 
+             ", totalWritten=" + rowsWritten);
+  
   if (complete) {
     clearReportingFlatRebuildState_();
     sortReportingFlatSheet_(spreadsheet);
   } else {
     setReportingFlatRebuildState_({
-      nextSourceRow: nextSourceRow
+      nextSourceRow: nextSourceRow,
+      totalExpected: totalDataRows,
+      lastRun: new Date().toISOString()
     });
   }
   
@@ -6003,6 +6430,27 @@ function ensureReportingFlatSheetInitialized_(spreadsheet, resetSheet) {
 function appendReportingFlatRows_(spreadsheet, rows) {
   if (!rows || !rows.length) return;
   const sheet = ensureReportingFlatSheetInitialized_(spreadsheet, false);
+  
+  // Duplicate prevention: check existing recordIds
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1 && rows[0].recordId) {
+    const existingData = sheet.getRange(2, 2, lastRow - 1, 1).getValues(); // Column B = recordId
+    const existingIds = {};
+    for (var i = 0; i < existingData.length; i++) {
+      existingIds[String(existingData[i][0])] = true;
+    }
+    // Filter out duplicates
+    const uniqueRows = rows.filter(function(row) {
+      return !existingIds[String(row.recordId)];
+    });
+    if (uniqueRows.length < rows.length) {
+      Logger.log("[APPEND] Skipped " + (rows.length - uniqueRows.length) + " duplicate rows");
+    }
+    rows = uniqueRows;
+  }
+  
+  if (!rows.length) return; // All duplicates, nothing to append
+  
   const values = rows.map(function(row) {
     return DASHBOARD_REPORTING_FLAT_HEADERS.map(function(header) {
       return Object.prototype.hasOwnProperty.call(row, header) ? row[header] : "";
@@ -6055,24 +6503,27 @@ function resetReportingFlatRebuildState() {
 
 function installReportingFlatRefreshTrigger() {
   removeReportingFlatRefreshTrigger();
-  ScriptApp.newTrigger("rebuildReportingFlat")
+  ScriptApp.newTrigger("smartRebuildReportingFlat")
     .timeBased()
     .everyMinutes(DASHBOARD_FLAT_REBUILD_INTERVAL_MINUTES)
     .create();
   return {
     ok: true,
-    message: "Trigger installed for every " + DASHBOARD_FLAT_REBUILD_INTERVAL_MINUTES + " minutes"
+    message: "Trigger installed for every " + DASHBOARD_FLAT_REBUILD_INTERVAL_MINUTES + " minutes (using smart rebuild)"
   };
 }
 
 function removeReportingFlatRefreshTrigger() {
   const triggers = ScriptApp.getProjectTriggers();
+  var removed = 0;
   triggers.forEach(function(trigger) {
-    if (trigger.getHandlerFunction() === "rebuildReportingFlat") {
+    const handler = trigger.getHandlerFunction();
+    if (handler === "rebuildReportingFlat" || handler === "smartRebuildReportingFlat") {
       ScriptApp.deleteTrigger(trigger);
+      removed++;
     }
   });
-  return { ok: true, message: "Triggers removed" };
+  return { ok: true, message: "Removed " + removed + " trigger(s)" };
 }
 
 // ========== Helper Functions for Reporting_Flat ==========
@@ -6141,4 +6592,106 @@ function mustGetSheet_(spreadsheet, sheetName) {
   const sheet = spreadsheet.getSheetByName(sheetName);
   if (!sheet) throw new Error('Required sheet "' + sheetName + '" was not found.');
   return sheet;
+}
+
+function testTurnaroundShape() {
+  var result = getDashboardTurnaroundAnalytics({ datePreset: "thisYear" });
+  Logger.log("Keys: " + Object.keys(result).join(", "));
+  Logger.log("summary keys: " + Object.keys(result.summary || {}).join(", "));
+  Logger.log("highlights count: " + (result.highlights || []).length);
+  Logger.log("groups count: " + (result.groups || []).length);
+  if (result.groups && result.groups[0]) {
+    Logger.log("First group keys: " + Object.keys(result.groups[0]).join(", "));
+    Logger.log("First group metrics count: " + (result.groups[0].metrics || []).length);
+  }
+}
+
+function debugTurnaroundError() {
+  var query = [
+    "SELECT COUNT(*) as total",
+    "FROM `sodium-shard-459702-t9.executive_dataset.reporting_flat_native_view`",
+    "WHERE dateReceivedDate IS NOT NULL",
+    "LIMIT 1"
+  ].join("\n");
+  
+  try {
+    var request = {
+      query: query,
+      useLegacySql: false,
+      parameterMode: "NAMED",
+      queryParameters: []
+    };
+    Logger.log("[DEBUG] Sending query...");
+    var result = BigQuery.Jobs.query(request, BIGQUERY_PROJECT_ID);
+    Logger.log("[DEBUG] jobComplete: " + result.jobComplete);
+    Logger.log("[DEBUG] rows type: " + typeof result.rows);
+    Logger.log("[DEBUG] rows value: " + JSON.stringify(result.rows));
+    Logger.log("[DEBUG] result keys: " + Object.keys(result).join(", "));
+  } catch(e) {
+    Logger.log("[DEBUG] Error: " + e.toString());
+    Logger.log("[DEBUG] Stack: " + e.stack);
+  }
+}
+
+function debugTurnaroundQueryDirect() {
+  var source = BIGQUERY_NATIVE_REPORTING_VIEW;
+  
+  // Test 1: Just the filtered CTE
+  var query1 = [
+    "SELECT COUNT(*) as total",
+    "FROM " + source,
+    "WHERE dateReceivedDate IS NOT NULL",
+    "AND dateReceivedDate >= DATE('2025-01-01')"
+  ].join("\n");
+  
+  try {
+    var r1 = BigQuery.Jobs.query({ query: query1, useLegacySql: false }, BIGQUERY_PROJECT_ID);
+    Logger.log("[TEST1] jobComplete: " + r1.jobComplete + " rows: " + JSON.stringify(r1.rows));
+  } catch(e) { Logger.log("[TEST1] ERROR: " + e.toString()); }
+
+  // Test 2: Check if holiday table exists and is queryable
+  var query2 = "SELECT COUNT(*) FROM " + BIGQUERY_HOLIDAYS_TABLE;
+  try {
+    var r2 = BigQuery.Jobs.query({ query: query2, useLegacySql: false }, BIGQUERY_PROJECT_ID);
+    Logger.log("[TEST2] Holiday table rows: " + JSON.stringify(r2.rows));
+  } catch(e) { Logger.log("[TEST2] Holiday table ERROR: " + e.toString()); }
+
+  // Test 3: Check if GENERATE_DATE_ARRAY works on the view
+  var query3 = [
+    "WITH sample AS (",
+    "  SELECT dateReceivedDate",
+    "  FROM " + source,
+    "  WHERE dateReceivedDate IS NOT NULL",
+    "  LIMIT 5",
+    ")",
+    "SELECT",
+    "  (SELECT COUNT(*)",
+    "   FROM UNNEST(GENERATE_DATE_ARRAY(",
+    "     DATE_ADD(dateReceivedDate, INTERVAL 1 DAY),",
+    "     dateReceivedDate,",
+    "     INTERVAL 1 DAY",
+    "   )) AS d",
+    "   WHERE EXTRACT(DAYOFWEEK FROM d) BETWEEN 2 AND 6",
+    "  ) AS business_days",
+    "FROM sample"
+  ].join("\n");
+  try {
+    var r3 = BigQuery.Jobs.query({ query: query3, useLegacySql: false }, BIGQUERY_PROJECT_ID);
+    Logger.log("[TEST3] GENERATE_DATE_ARRAY test: jobComplete=" + r3.jobComplete + " rows=" + JSON.stringify(r3.rows));
+  } catch(e) { Logger.log("[TEST3] ERROR: " + e.toString()); }
+
+  // Test 4: Check stage date columns exist
+  var query4 = [
+    "SELECT",
+    "  COUNTIF(verificationDateReceived IS NOT NULL) as verif,",
+    "  COUNTIF(issuanceDateReceived IS NOT NULL) as issuance,",
+    "  COUNTIF(deficiencyDateReceived IS NOT NULL) as deficiency,",
+    "  COUNTIF(releaseDateReceived IS NOT NULL) as release_count",
+    "FROM " + source,
+    "LIMIT 1"
+  ].join("\n");
+  try {
+    var r4 = BigQuery.Jobs.query({ query: query4, useLegacySql: false }, BIGQUERY_PROJECT_ID);
+    Logger.log("[TEST4] Stage columns: jobComplete=" + r4.jobComplete + " rows=" + JSON.stringify(r4.rows));
+  } catch(e) { Logger.log("[TEST4] Stage columns ERROR: " + e.toString()); }
 }

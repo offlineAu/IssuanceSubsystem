@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Executive Analytics Dashboard</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+        <style>
+            :root {
+                --prussian-blue: #0B1D37;
+                --slate-grey: #727F8E;
+                --camel: #AC9055;
+                --soft-fawn: #CFB88D;
+                --bg-light: #f8fafc;
+                --pale-oak: #D3C2A0;
+            }
+
+            body {
+                margin: 0;
+                font-family: 'Inter', sans-serif;
+                background-color: var(--pale-oak);
+                overflow-x: hidden;
+            }
+
+            /* --- Navbar --- */
+            .navbar-custom {
+                background-color: var(--prussian-blue);
+                padding: 1rem 2.5rem;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+                position: relative;
+                z-index: 1000;
+            }
+
+            .navbar-brand-custom {
+                color: var(--soft-fawn) !important;
+                font-weight: 800;
+                letter-spacing: 1px;
+                text-transform: uppercase;
+            }
+
+            /* --- Refined Flyout Panel --- */
+            .filter-flyout {
+                position: fixed;
+                top: 95px; 
+                left: -360px; 
+                width: 320px;
+                height: calc(100vh - 130px); 
+                background: rgba(255, 255, 255, 0.95);
+                backdrop-filter: blur(10px); /* Glassmorphism */
+                z-index: 2000;
+                box-shadow: 15px 0 40px rgba(11, 29, 55, 0.1);
+                transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+                padding: 35px 25px;
+                display: flex;
+                flex-direction: column;
+                border-radius: 0 30px 30px 0;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+            }
+
+            /* --- Modern Rounded Trigger --- */
+            .filter-trigger {
+                position: absolute;
+                top: 95px; 
+                left: 20px;
+                width: 54px;
+                height: 54px;
+                background: var(--prussian-blue);
+                color: var(--soft-fawn);
+                border-radius: 50%; /* Fully rounded to remove 'edgy' look */
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                z-index: 2010;
+                transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                box-shadow: 0 8px 25px rgba(11, 29, 55, 0.2);
+                border: 2px solid rgba(207, 184, 141, 0.3);
+            }
+
+            .filter-trigger i {
+                transition: transform 0.4s ease;
+            }
+
+            .filter-trigger:hover {
+                background: var(--camel);
+                color: white;
+                transform: scale(1.1) rotate(15deg);
+            }
+
+            /* --- Active State Improvements --- */
+            .filter-open .filter-flyout { left: 0; }
+            .filter-open .filter-trigger { 
+                left: 290px; 
+                background: var(--camel); 
+                color: white;
+                box-shadow: -10px 0 20px rgba(0,0,0,0.1);
+            }
+            .filter-open .filter-trigger i { transform: rotate(-90deg); }
+
+            /* --- Filter UI Details --- */
+            .filter-header { border-bottom: 2px solid #f0f0f0; margin-bottom: 25px; padding-bottom: 15px; }
+            .filter-label { font-size: 0.7rem; font-weight: 800; color: var(--slate-grey); text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px; display: block; }
+            .form-select-custom { 
+                border-radius: 12px; 
+                border: 1px solid #E2E8F0; 
+                font-size: 0.9rem; 
+                padding: 12px; 
+                width: 100%; 
+                background-color: var(--bg-light); 
+                transition: all 0.2s;
+            }
+            .form-select-custom:focus { border-color: var(--camel); box-shadow: 0 0 0 3px rgba(172, 144, 85, 0.15); outline: none; }
+            
+            .btn-apply { 
+                width: 100%; 
+                background: var(--prussian-blue); 
+                color: white; 
+                font-weight: 700; 
+                padding: 14px; 
+                border-radius: 12px; 
+                border: none; 
+                margin-top: auto;
+                box-shadow: 0 4px 12px rgba(11, 29, 55, 0.2);
+                transition: transform 0.2s;
+            }
+            .btn-apply:active { transform: scale(0.98); }
+
+            /* --- Dashboard Content --- */
+            .dashboard-container { padding: 90px 2.5rem 30px 110px; max-width: 1400px; margin: 0 auto; transition: opacity 0.3s; }
+            .filter-open .dashboard-container { opacity: 0.5; pointer-events: none; }
+            .content-card { background: white; border-radius: 24px; padding: 35px; box-shadow: 0 15px 35px rgba(0,0,0,0.06); border: 1px solid rgba(255,255,255,0.8); }
+        </style>
+    </head>
+    <body>
+
+        <nav class="navbar navbar-custom">
+            <div class="container-fluid">
+                <span class="navbar-brand navbar-brand-custom">
+                    <i class="fa-solid fa-chart-line me-2"></i> Analytics Hub
+                </span>
+                <div class="text-white opacity-75 small">Logged in as <strong>Administrator</strong></div>
+            </div>
+        </nav>
+
+        <div class="filter-trigger" onclick="toggleFilters()" title="Adjust Perspective">
+            <i class="fa-solid fa-sliders"></i>
+        </div>
+
+        <div class="filter-flyout">
+            <div class="filter-header">
+                <h5 class="fw-bold mb-0">Global Filters</h5>
+                <p class="text-muted small mb-0">Customize your data view</p>
+            </div>
+            
+            <div class="filter-group mb-4">
+                <label class="filter-label">ES II In-Charge</label>
+                <select class="form-select-custom"><option>All Personnel</option></select>
+            </div>
+            <div class="filter-group mb-4">
+                <label class="filter-label">Program Category</label>
+                <select class="form-select-custom"><option>All Academic Programs</option></select>
+            </div>
+            <div class="filter-group mb-4">
+                <label class="filter-label">Institution (HEI)</label>
+                <select class="form-select-custom"><option>All Institutions</option></select>
+            </div>
+            <div class="filter-group mb-4">
+                <label class="filter-label">Timeframe</label>
+                <select class="form-select-custom"><option>Fiscal Year 2026</option></select>
+            </div>
+
+            <button class="btn-apply" onclick="toggleFilters()">Update Dashboard</button>
+            <button class="btn btn-link text-muted small mt-3 text-decoration-none" onclick="toggleFilters()">Dismiss</button>
+        </div>
+
+        <div class="dashboard-container">
+            <div class="row g-4">
+                <div class="col-lg-8">
+                    <div class="content-card">
+                        <div class="d-flex justify-content-between align-items-center mb-4">
+                            <h4 class="fw-bold mb-0">Top 10 Programs</h4>
+                            <span class="badge rounded-pill px-3 py-2" style="background: var(--prussian-blue); color: var(--soft-fawn);">Live Feed</span>
+                        </div>
+                        <!-- Program Rows Here -->
+                        <div class="d-flex align-items-center py-3 border-bottom border-light">
+                            <div class="me-3 fw-bold text-muted" style="width: 30px;">01</div>
+                            <div class="flex-grow-1 fw-semibold">BS Criminology</div>
+                            <div class="fw-bold text-end" style="color: var(--camel);">690</div>
+                        </div>
+                        <div class="d-flex align-items-center py-3 border-bottom border-light">
+                            <div class="me-3 fw-bold text-muted" style="width: 30px;">02</div>
+                            <div class="flex-grow-1 fw-semibold">BS Business Administration</div>
+                            <div class="fw-bold text-end" style="color: var(--camel);">397</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-4">
+                    <div class="content-card" style="background: var(--prussian-blue); color: white;">
+                        <h6 class="text-uppercase fw-bold opacity-75 small">Summary Insight</h6>
+                        <hr class="opacity-25">
+                        <p class="small opacity-75">Highest application volumes recorded for current cycle. Use the sidebar to drill down into specific HEIs.</p>
+                        <div class="mt-4">
+                            <div class="small opacity-50">Total Processed</div>
+                            <div class="display-5 fw-bold" style="color: var(--soft-fawn);">2,749</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            function toggleFilters() {
+                document.body.classList.toggle('filter-open');
+            }
+        </script>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    </body>
+</html>

@@ -71,7 +71,11 @@ var Service = {
   },
 
   getAnalyticsData: function(filters, onSuccess, onFailure) {
-    this.runServerCall("getAnalyticsData", [filters], onSuccess, onFailure);
+    // Include programOwnershipMap for ES2/Program alignment on backend
+    var payload = Object.assign({}, filters, {
+      programOwnershipMap: Model.referenceData.programOwnershipMap || {}
+    });
+    this.runServerCall("getAnalyticsData", [payload], onSuccess, onFailure);
   },
 
   refreshDashboardCache: function(onSuccess, onFailure) {
@@ -92,10 +96,13 @@ var Service = {
 
   getDashboardDetail: function(kind, name, filters, page, pageSize, onSuccess, onFailure) {
     // Re-pack arguments for routeModule payload
+    // Include programOwnershipMap for ES2/Program alignment on backend
     var payload = {
       kind: kind,
       name: name,
-      filters: filters,
+      filters: Object.assign({}, filters, {
+        programOwnershipMap: Model.referenceData.programOwnershipMap || {}
+      }),
       page: page,
       pageSize: pageSize
     };

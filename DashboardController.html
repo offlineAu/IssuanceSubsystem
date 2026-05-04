@@ -86,6 +86,14 @@ var Controller = {
     var fallback = document.getElementById("navbarLogoFallback");
     var loading = document.getElementById("navbarLogoLoading");
 
+    Model.dom.filterDatePreset = document.getElementById("filterDatePreset");
+    Model.dom.filterDateFrom = document.getElementById("filterDateFrom");
+    Model.dom.filterDateTo = document.getElementById("filterDateTo");
+    Model.dom.filterTrigger = document.getElementById("filterTrigger");
+    Model.dom.filterFlyout = document.getElementById("filterFlyout");
+    Model.dom.filterOverlay = document.getElementById("filterOverlay");
+    Model.dom.mainDashboard = document.getElementById("mainDashboard");
+
     if (shell) {
       shell.classList.add("is-loading");
       shell.classList.remove("is-ready");
@@ -201,11 +209,11 @@ var Controller = {
     if (!Model.hasPendingFilterChanges) return;
     var requestFilters = Object.assign({}, Model.filters);
     console.info("Executive Dashboard filters applied:", requestFilters);
-    View.setFilterBusy(true, "Applying filters...");
+    View.setFilterBusy(true);
     var requestToken = Model.beginDashboardRequest();
     this.executeDashboardRequest(requestToken, function(onSuccess, onFailure) {
       Service.getAnalyticsData(requestFilters, onSuccess, onFailure);
-    }, "Applying filters...");
+    });
   },
 
   handleClearFilters: function() {

@@ -180,15 +180,50 @@ var Model = {
     this.lastRequestId = payload && payload.meta && payload.meta.requestId ? payload.meta.requestId : this.lastRequestId;
     this.referenceData.staticApplicationStatuses = getArray(payload, ["data", "staticApplicationStatuses"], this.referenceData.staticApplicationStatuses);
     this.referenceData.usersDirectory = getArray(payload, ["data", "usersDirectory"], this.referenceData.usersDirectory);
-    this.referenceData.es2Owners = getArray(payload, ["data", "es2Owners"], this.referenceData.es2Owners);
     this.referenceData.transactionTypes = getArray(payload, ["data", "transactionTypes"], this.referenceData.transactionTypes);
     this.referenceData.modalColumns = getArray(payload, ["data", "modalColumns"], this.referenceData.modalColumns);
-    this.referenceData.availableYears = getArray(payload, ["data", "availableYears"], this.referenceData.availableYears);
-    this.referenceData.es2ProgramMap = getObject(payload, ["data", "es2ProgramMap"], this.referenceData.es2ProgramMap);
-    this.referenceData.programOwnershipMap = getObject(payload, ["data", "programOwnershipMap"], this.referenceData.programOwnershipMap);
     this.referenceData.transactionTypeMap = getObject(payload, ["data", "transactionTypeMap"], this.referenceData.transactionTypeMap);
+
+    // availableYears: try data path first, then meta path
+    this.referenceData.availableYears = getArray(payload, ["data", "availableYears"], []);
+    if (!this.referenceData.availableYears.length) {
+      this.referenceData.availableYears = getArray(payload, ["meta", "availableYears"], []);
+    }
+    if (!this.referenceData.availableYears.length) {
+      this.referenceData.availableYears = getArray(payload, ["referenceData", "availableYears"], []);
+    }
+
+    // es2Owners: try referenceData path first (richer source), then data path
+    this.referenceData.es2Owners = getArray(payload, ["referenceData", "es2Owners"], []);
+    if (!this.referenceData.es2Owners.length) {
+      this.referenceData.es2Owners = getArray(payload, ["data", "es2Owners"], []);
+    }
+
+    // es2ProgramMap: try referenceData path first, then data path
+    this.referenceData.es2ProgramMap = getObject(payload, ["referenceData", "es2ProgramMap"], {});
+    if (!Object.keys(this.referenceData.es2ProgramMap).length) {
+      this.referenceData.es2ProgramMap = getObject(payload, ["data", "es2ProgramMap"], {});
+    }
+
+    // programOwnershipMap: try referenceData path first, then data path
+    this.referenceData.programOwnershipMap = getObject(payload, ["referenceData", "programOwnershipMap"], {});
+    if (!Object.keys(this.referenceData.programOwnershipMap).length) {
+      this.referenceData.programOwnershipMap = getObject(payload, ["data", "programOwnershipMap"], {});
+    }
+
     this.monthlyVolumeRows = getArray(payload, ["sections", "monthlyVolume", "rows"], this.monthlyVolumeRows);
-    this.appliedFilters = Object.assign({}, payload && payload.meta && payload.meta.appliedFilters ? payload.meta.appliedFilters : this.appliedFilters);
+    // In hydrateFromPayload, replace the appliedFilters assignment:
+    var serverApplied = payload && payload.meta && payload.meta.appliedFilters ? payload.meta.appliedFilters : {};
+    this.appliedFilters = Object.assign({}, this.appliedFilters, {
+      program: serverApplied.program || "ALL",
+      es2InCharge: serverApplied.es2InCharge || "ALL",
+      datePreset: serverApplied.datePreset || "thisYear",
+      dateFrom: serverApplied.datePreset === "specificDate" ? (serverApplied.dateFrom || "") : "",
+      dateTo: serverApplied.datePreset === "specificDate" ? (serverApplied.dateTo || "") : "",
+      applicationStatus: serverApplied.applicationStatus || "ALL",
+      transactionType: serverApplied.transactionType || "ALL",
+      hei: serverApplied.hei || "ALL"
+    });
     this.filters = Object.assign({}, this.appliedFilters);
     this.hasPendingFilterChanges = false;
     this.filteredData = this.applyFilters(this.fullData, this.appliedFilters);
@@ -801,7 +836,10 @@ var Model = {
   },
 
   getModalPageRows: function() {
-    return this.modalState.detail && this.modalState.detail.records ? this.modalState.detail.records.slice() : [];
+    var detail = this.modalState.detail;
+    if (!detail) return [];
+    // Server sends 'rows', legacy sends 'records'
+    return (detail.rows || detail.records || []).slice();
   },
 
   setModalPage: function(page) {
@@ -878,6 +916,7 @@ var Model = {
     if (token.indexOf("for evaluation") !== -1) return "For Evaluation";
     if (token.indexOf("evaluated") !== -1 || token.indexOf("for verification") !== -1) return "Evaluated";
     if (token.indexOf("deficien") !== -1) return "Deficiency";
+    if (token.indexOf("deficiency") !== -1) return "Deficiency";
     if (token.indexOf("verified") !== -1) return "Verified";
     if (token.indexOf("for signature") !== -1 || token.indexOf("for signing") !== -1 || token.indexOf("signature") !== -1) return "For Signature";
     if (token.indexOf("for release") !== -1 || token.indexOf("ready for release") !== -1 || token.indexOf("pending release") !== -1 || token.indexOf("releasing") !== -1) return "For Release";
@@ -888,11 +927,11 @@ var Model = {
   },
 
   normalizeReportableStatus: function(statusValue) {
+    // normalizeDashboardStatus already handles misspellings and returns clean canonical strings
+    // So just pass through whatever came back from it
     var s = String(statusValue || "").trim();
     if (!s) return "";
-    if (s === "Approved" || s === "Verified" || s === "Released" || s === "Cancelled" || s === "Deficiency") return s;
-    if (s === "For Evaluation" || s === "Evaluated" || s === "For Signature" || s === "For Release") return s;
-    return "";
-  }
+    return s;
+  },
 };
 </script>

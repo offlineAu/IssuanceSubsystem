@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
     <?!= include('Styles'); ?>
     <?!= include('DashboardStyles'); ?>
@@ -19,6 +20,7 @@
     <?!= include('DashboardViewContent'); ?>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <?!= include('DashboardModel'); ?>
     <?!= include('DashboardService'); ?>
     <?!= include('DashboardView'); ?>
@@ -30,5 +32,43 @@
         }
       };
     </script>
+
+    <!-- ADD THIS RIGHT HERE -->
+    <script>
+      (function() {
+        var trigger = document.getElementById('filterTrigger');
+        var flyout = document.getElementById('filterFlyout');
+
+        if (trigger && flyout) {
+          trigger.onclick = null;
+          trigger.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var isOpen = flyout.style.left === '0px';
+            flyout.style.left = isOpen ? '-360px' : '0px';
+            document.body.classList.toggle('filter-open', !isOpen);
+          });
+        }
+
+        // ADD THIS: force enable apply button whenever any filter changes
+        var filterIds = ['filterEs2', 'filterProgram', 'filterStatus', 'filterHei', 'filterDatePreset', 'filterDateFrom', 'filterDateTo'];
+        filterIds.forEach(function(id) {
+          var el = document.getElementById(id);
+          if (el) {
+            el.addEventListener('change', function() {
+              var btn = document.getElementById('applyFiltersButton');
+              if (btn) {
+                btn.disabled = false;
+                // Also set the flag in Model if it exists
+                if (typeof Model !== 'undefined') {
+                  Model.hasPendingFilterChanges = true;
+                }
+              }
+            });
+          }
+        });
+
+      })();
+    </script>
+
   </body>
 </html>

@@ -3,65 +3,98 @@
     <div class="app-navbar-top">
       <div class="app-navbar-logo-slot">
         <div class="app-navbar-logo-placeholder is-loading" id="navbarLogoShell">
-          <div class="app-navbar-paper-panel">
-            <div class="app-navbar-logo-loading" id="navbarLogoLoading" aria-live="polite">
-              <span class="app-navbar-logo-loading-dot"></span>
-              <span>Loading logo</span>
-            </div>
-            <div class="app-navbar-paper-inner">
-              <img id="navbarLogoImage" class="app-navbar-logo-image d-none" alt="System logo">
-              <span id="navbarLogoFallback" class="app-navbar-logo-fallback">ITS</span>
-            </div>
+          <div class="app-navbar-logo-loading" id="navbarLogoLoading" aria-live="polite">
+            <span class="app-navbar-logo-loading-dot"></span>
+            <span>Loading logo</span>
+          </div>
+          <div class="app-navbar-logo-inner">
+            <img id="navbarLogoImage" class="app-navbar-logo-image" alt="System logo">
+            <span id="navbarLogoFallback" class="app-navbar-logo-fallback d-none">ITS</span>
           </div>
         </div>
       </div>
       <div class="app-navbar-title-wrap">
         <h1 class="app-navbar-title">Executive Analytics Dashboard</h1>
       </div>
-      <div class="app-navbar-title-spacer" aria-hidden="true"></div>
     </div>
     <div class="app-navbar-navrow">
+      <div class="app-navbar-account" aria-label="Current access mode">
+        <div class="status-badge">
+          <div class="status-dot"></div>
+          <span id="accountName" class="app-navbar-account-name">ES II</span>
+        </div>
+      </div>
       <div class="app-navbar-tabs">
-        <button type="button" class="app-navbar-link is-active" id="navDashboardBtn" data-view="dashboard" aria-pressed="true">
-          <i class="bi bi-graph-up-arrow" aria-hidden="true"></i>
+        <button type="button" class="app-navbar-link is-active dashboard-icon-loading" id="navDashboardBtn" data-view="dashboard" aria-pressed="true">
+          <i data-lucide="layout-dashboard" style="width:18px;height:18px;"></i>
+          <span class="icon-skeleton-dashboard"></span>
           <span>Dashboard</span>
         </button>
-      </div>
-      <div class="app-navbar-account" aria-label="Current access mode">
-        <span id="accountName" class="app-navbar-account-name">ES II</span>
       </div>
     </div>
   </div>
 </nav>
 
-<main class="container page-shell">
-  <section class="search-filter-card">
-    <div class="search-filter-layout">
-      <div class="filter-row">
-        <div>
-          <div class="main-filter-title">Global Dashboard Filters</div>
-          <div class="main-filter-subtitle">Edit filters first, then apply once to refresh all cards, rankings, and people analytics together.</div>
-        </div>
-        <div class="filter-actions">
-          <button id="applyFiltersButton" class="btn btn-primary rounded-4" type="button">Apply Filters</button>
-          <button id="clearFiltersButton" class="btn btn-outline-secondary rounded-4" type="button">Clear Filters</button>
-          <button id="refreshButton" class="btn btn-gradient btn-icon-only rounded-circle" type="button" aria-label="Refresh analytics" title="Refresh analytics">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
-          </button>
-        </div>
-      </div>
-      <div class="row g-3">
-        <div class="col-md-6 col-xl-2"><label class="form-label">ES II In-Charge</label><select id="filterEs2" class="form-select"></select></div>
-        <div class="col-md-6 col-xl-2"><label class="form-label">Program</label><select id="filterProgram" class="form-select"></select></div>
-        <div class="col-md-6 col-xl-2"><label class="form-label">Application Status</label><select id="filterStatus" class="form-select"></select></div>
-        <div class="col-md-6 col-xl-2"><label class="form-label">Transaction Type</label><select id="filterTransactionType" class="form-select"></select></div>
-        <div class="col-md-6 col-xl-2"><label class="form-label">HEI</label><select id="filterHei" class="form-select"></select></div>
-        <div class="col-md-6 col-xl-2"><label class="form-label">Date</label><select id="filterDatePreset" class="form-select"><option value="allTime">All Time</option><option value="thisYear">This Year</option><option value="yearToDate">Year to Date</option><option value="last30Days">Last 30 Days</option><option value="last90Days">Last 90 Days</option><option value="specificDate">Specific Date</option></select></div>
-        <div id="filterDateFromWrap" class="col-md-6 col-xl-1 d-none"><label class="form-label">From</label><input id="filterDateFrom" type="date" class="form-control"></div>
-        <div id="filterDateToWrap" class="col-md-6 col-xl-1 d-none"><label class="form-label">To</label><input id="filterDateTo" type="date" class="form-control"></div>
-      </div>
-    </div>
-  </section>
+<!-- TRIGGER -->
+<div class="filter-trigger" id="filterTrigger" title="Adjust Perspective">
+  <i class="fa-solid fa-sliders"></i>
+</div>
+
+<!-- OVERLAY -->
+<div class="filter-overlay" id="filterOverlay"></div>
+
+<!-- FLYOUT PANEL -->
+<div class="filter-flyout" id="filterFlyout">
+  <div class="filter-header">
+    <h5 class="fw-bold mb-0">Global Filters</h5>
+    <p class="text-muted small mb-0">Customize your data view</p>
+  </div>
+
+  <div class="filter-group mb-4">
+    <label class="filter-label">ES II In-Charge</label>
+    <select id="filterEs2" class="form-select-flyout"></select>
+  </div>
+
+  <div class="filter-group mb-4">
+    <label class="filter-label">Program</label>
+    <select id="filterProgram" class="form-select-flyout"></select>
+  </div>
+
+  <div class="filter-group mb-4">
+    <label class="filter-label">Application Status</label>
+    <select id="filterStatus" class="form-select-flyout"></select>
+  </div>
+
+  <div class="filter-group mb-4">
+    <label class="filter-label">HEI (Institution)</label>
+    <select id="filterHei" class="form-select-flyout"></select>
+  </div>
+
+  <div class="filter-group mb-4">
+    <label class="filter-label">Date Range</label>
+    <select id="filterDatePreset" class="form-select-flyout">
+      <option value="allTime">All Time</option>
+      <option value="thisYear">This Year</option>
+      <option value="yearToDate">Year to Date</option>
+      <option value="last30Days">Last 30 Days</option>
+      <option value="last90Days">Last 90 Days</option>
+      <option value="specificDate">Specific Date</option>
+    </select>
+  </div>
+  <div id="filterDateFromWrap" class="filter-group d-none">
+    <label class="filter-label">From</label>
+    <input id="filterDateFrom" type="date" class="form-control-flyout">
+  </div>
+  <div id="filterDateToWrap" class="filter-group d-none">
+    <label class="filter-label">To</label>
+    <input id="filterDateTo" type="date" class="form-control-flyout">
+  </div>
+
+  <button id="applyFiltersButton" class="btn-apply" type="button">Update Dashboard</button>
+  <button id="closeFilterPanel" class="btn btn-link text-muted small mt-3 text-decoration-none" type="button">Dismiss</button>
+</div>
+
+<main class="container page-shell" id="mainDashboard">
 
   <section id="pageStatusBanner" class="dashboard-banner d-none" aria-live="polite"></section>
 
@@ -71,150 +104,249 @@
       <span id="reportLoadingText">Loading analytics...</span>
     </div>
 
-    <div class="report-header-card">
-      <div>
-        <span class="report-placeholder-kicker">Analytics</span>
-        <h2 class="report-placeholder-title">Issuance Overview</h2>
-        <p class="report-placeholder-copy">Live summaries update from the dataset currently loaded in the dashboard.</p>
+    <div class="dashboard-chart-row">
+      <div class="dashboard-chart-col">
+        <div class="summary-trend-chart-wrapper">
+          <div class="summary-trend-chart-header">
+            <div class="summary-trend-chart-title" id="summaryTrendChartTitle">Application Status Trend</div>
+            <div class="summary-trend-chart-subtitle">Monthly overview of application counts across all stages</div>
+          </div>
+          <div class="summary-trend-chart-legend" id="summaryTrendChartLegend"></div>
+          <div class="summary-trend-chart-nav">
+            <button type="button" class="summary-trend-chart-nav-btn" id="trendChartPrevBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            </button>
+            <span class="summary-trend-chart-nav-label" id="trendChartNavLabel"></span>
+            <button type="button" class="summary-trend-chart-nav-btn" id="trendChartNextBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            </button>
+          </div>
+          <div class="summary-trend-chart-area">
+            <canvas id="summaryTrendChart"></canvas>
+          </div>
+        </div>
       </div>
-      <div class="report-header-hints">
-        <div id="reportDatasetHint" class="report-dataset-hint"></div>
-        <div id="reportDataSourceHint" class="report-source-hint d-none"></div>
+      <div class="dashboard-chart-col">
+        <section class="top-programs-card" id="topProgramsCard">
+          <!-- Left Panel: Featured #1 -->
+          <div class="top-programs-hero" id="topProgramsHero"></div>
+          <!-- Right Panel: List #2-10 -->
+          <div class="top-programs-list-panel">
+            <div class="top-programs-list-header">
+              <div>
+                <h3 class="top-programs-list-title">TOP 10 PROGRAMS</h3>
+                <p class="top-programs-list-subtitle">The ten programs with the highest application volume under the current filters.</p>
+              </div>
+              <button class="top-programs-filter-btn">Current Filters</button>
+            </div>
+            <div class="top-programs-rows" id="topProgramsRows"></div>
+          </div>
+        </section>
       </div>
-      <section id="reportBatchLoadingState" class="report-batch-loading d-none" aria-live="polite" title="Loading more data">
-        <div class="report-batch-loading-bar"></div>
-        <span id="reportBatchLoadingText" class="visually-hidden">Loading more data...</span>
-      </section>
     </div>
 
-    <div class="report-summary-grid" id="summaryCards"></div>
-
-    <section class="report-card report-card-scrollable">
-      <div class="report-card-header">
+    <!-- Workload by ES II -->
+    <section class="dashboard-card">
+      <div class="dashboard-card-header">
         <div>
-          <h3>Workload by ES II Owner</h3>
-          <div class="report-card-copy">Approved, deficiency, processing or pending counts per ES II owner, with total volume in the last column.</div>
+          <h3 class="dashboard-card-title">Workload by ES II</h3>
+          <p class="dashboard-card-subtitle">Approved, deficiency, processing or pending counts per ES II owner.</p>
         </div>
       </div>
       <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0 analytics-table">
-          <thead><tr><th>ES II Owner</th><th>Approved</th><th>Deficiency</th><th>Processing / Pending</th><th>Total</th></tr></thead>
+        <table class="table-workload">
+          <thead>
+            <tr>
+              <th style="width: 25%;">Owner Profile</th>
+              <th style="width: 25%;">Status Flags</th>
+              <th style="width: 35%;">Processing Load</th>
+              <th>Total</th>
+            </tr>
+          </thead>
           <tbody id="es2TableBody"></tbody>
         </table>
       </div>
     </section>
 
-    <section class="report-card">
-      <div class="report-card-header">
+    <div class="report-chart-grid report-chart-grid-balanced">
+      <!-- Application Status -->
+      <section class="dashboard-card">
+        <div class="dashboard-card-header">
+          <div>
+            <h3 class="dashboard-card-title">Application Status</h3>
+            <p class="dashboard-card-subtitle">Latest standing per student, grouped into clear status buckets.</p>
+          </div>
+          <div class="context-dots"><i data-lucide="more-horizontal" size="18"></i></div>
+        </div>
+        <div class="status-chart-layout">
+          <div class="status-chart-col">
+            <div class="chart-wrapper">
+              <canvas id="overallStatusChart"></canvas>
+              <div class="chart-overlay-text">
+                <div class="chart-overlay-number" id="overallStatusTotal">0</div>
+                <div class="chart-overlay-label" id="overallStatusLabel">Total Students</div>
+              </div>
+            </div>
+          </div>
+          <div class="status-legend-col">
+            <ul class="legend-list" id="overallStatusLegend"></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Status Progression -->
+      <section class="dashboard-card">
+        <div class="dashboard-card-header">
+          <div>
+            <h3 class="dashboard-card-title">Status Progression</h3>
+            <p class="dashboard-card-subtitle">How records are distributed from evaluation through release.</p>
+          </div>
+        </div>
+        <div id="statusProgressionBars"></div>
+      </section>
+    </div>
+
+    <!-- Turnaround Time Analytics -->
+    <section class="dashboard-card">
+      <div class="dashboard-card-header">
         <div>
-          <h3>Top 10 Programs</h3>
-          <div class="report-card-copy">The ten programs with the highest application volume under the current filters.</div>
+          <h3 class="dashboard-card-title">Turnaround Time Analytics</h3>
+          <p class="dashboard-card-subtitle">Elapsed days measured from earliest available stage date to latest available stage date.</p>
         </div>
       </div>
-      <div id="topProgramsBars"></div>
+      <div class="row g-4">
+        <!-- Left Sidebar Metrics -->
+        <div class="col-lg-3">
+          <div class="row g-3" id="turnaroundSummary"></div>
+        </div>
+        <!-- Right Status Cards Grid -->
+        <div class="col-lg-9">
+          <div class="row g-3" id="turnaroundGroups"></div>
+        </div>
+      </div>
     </section>
 
-    <div class="report-chart-grid report-chart-grid-balanced">
-      <section class="report-card report-card-scrollable">
-        <div class="report-card-header">
-          <div>
-            <h3>Overall Application Status</h3>
-            <div class="report-card-copy">Latest application standing per student, grouped into clear status buckets.</div>
+    <!-- Executive Metrics Row -->
+    <div class="row g-4 mb-4">
+      <!-- Monthly Application Volume -->
+      <div class="col-lg-4 col-md-6">
+        <div class="exec-metric-card" id="monthlyVolumeCard">
+          <div class="exec-card-header">
+            <span class="exec-card-title">Monthly Application Volume</span>
+            <span class="exec-card-icon"><i data-lucide="bar-chart-3" class="icon-20"></i></span>
           </div>
-        </div>
-        <div id="overallStatusBars" class="report-bars report-scroll-body"></div>
-      </section>
-
-      <section class="report-card report-card-scrollable">
-        <div class="report-card-header">
-          <div>
-            <h3>Status Progression Overview</h3>
-            <div class="report-card-copy">How current records are distributed from evaluation through release.</div>
+          <div class="exec-metric-value" id="monthlyVolumeTotal">0</div>
+          <div class="exec-metric-sub">Monthly intake shown from newest to oldest month</div>
+          <div class="exec-year-filter mt-2">
+            <select id="monthlyYearSelect" class="exec-year-select"></select>
           </div>
-        </div>
-        <div id="statusProgressionBars" class="report-bars report-scroll-body"></div>
-      </section>
-    </div>
-
-    <section class="report-card report-card-scrollable">
-      <div class="report-card-header">
-        <div>
-          <h3>Turnaround Time Analytics</h3>
-          <div class="report-card-copy">Elapsed days measured from the earliest available stage date to the latest available stage date in the tracked issuance sequence.</div>
+          <div class="exec-mini-chart" id="monthlyVolumeBars">
+            <!-- Bars rendered here -->
+          </div>
         </div>
       </div>
-      <div class="row g-4 align-items-start">
-        <div class="col-xl-4">
-          <div id="turnaroundSummary" class="report-summary-grid turnaround-summary-grid"></div>
-          <div id="turnaroundHighlights" class="mt-3"></div>
-        </div>
-        <div class="col-xl-8">
-          <div id="turnaroundGroups" class="row g-3"></div>
+
+      <!-- Workflow Backlog -->
+      <div class="col-lg-4 col-md-6">
+        <div class="exec-metric-card" id="workflowBacklogCard">
+          <div class="exec-card-header">
+            <span class="exec-card-title">Workflow Backlog</span>
+            <span class="exec-card-icon"><i data-lucide="layers" class="icon-20"></i></span>
+          </div>
+          <div class="exec-metric-value" id="workflowBacklogTotal">0</div>
+          <div class="exec-metric-sub">Latest active records waiting in each workflow stage</div>
+          <div class="exec-backlog-viz mt-3">
+            <div class="exec-backlog-bar" id="stageBacklogBars">
+              <!-- Stages rendered here -->
+            </div>
+          </div>
         </div>
       </div>
-    </section>
 
-    <div class="report-chart-grid report-chart-grid-balanced">
-      <section class="report-card report-card-scrollable">
-        <div class="report-card-header">
-          <div>
-            <h3>Document Location Load</h3>
-            <div class="report-card-copy">Current document counts by clean, readable location buckets.</div>
+      <!-- SLA Exposure -->
+      <div class="col-lg-4 col-md-12">
+        <div class="exec-metric-card" id="slaExposureCard">
+          <div class="exec-card-header">
+            <span class="exec-card-title">SLA Exposure</span>
+            <span class="exec-card-icon"><i data-lucide="alert-triangle" class="icon-20"></i></span>
           </div>
-        </div>
-        <div id="locationLoadBars" class="report-bars report-scroll-body"></div>
-      </section>
-
-      <section class="report-card report-card-scrollable">
-        <div class="report-card-header">
-          <div>
-            <h3>Monthly Application Volume</h3>
-            <div class="report-card-copy">Monthly intake shown from the newest month to the oldest month.</div>
+          <div class="exec-metric-value" id="slaExposureTotal">0</div>
+          <div class="exec-metric-sub">Active records approaching or passing target release date</div>
+          <div class="exec-sla-bars mt-3" id="slaExposureBars">
+            <!-- SLA bars rendered here -->
           </div>
-          <div class="report-card-header-actions">
-            <label for="monthlyYearSelect" class="form-label mb-0">Year</label>
-            <select id="monthlyYearSelect" class="form-select form-select-sm monthly-year-select"></select>
-          </div>
-        </div>
-        <div id="monthlyVolumeBars" class="report-bars report-scroll-body"></div>
-      </section>
-    </div>
-
-    <div class="report-chart-grid report-chart-grid-balanced">
-      <section class="report-card report-card-scrollable">
-        <div class="report-card-header">
-          <div>
-            <h3>SLA Exposure</h3>
-            <div class="report-card-copy">Active records approaching or passing their target release date.</div>
-          </div>
-        </div>
-        <div id="slaExposureBars" class="report-bars report-scroll-body"></div>
-      </section>
-
-      <section class="report-card report-card-scrollable">
-        <div class="report-card-header">
-          <div>
-            <h3>Workflow Backlog</h3>
-            <div class="report-card-copy">Latest active records currently waiting in each workflow stage.</div>
-          </div>
-        </div>
-        <div id="stageBacklogBars" class="report-bars report-scroll-body"></div>
-      </section>
-    </div>
-
-    <section class="report-card">
-      <div class="report-card-header">
-        <div>
-          <h3>Assigned Staff Activity</h3>
-          <div class="report-card-copy">Completed, pending, and total handled counts by assigned staff.</div>
         </div>
       </div>
-      <div id="productivityChart" class="report-chart-block mb-3"></div>
-      <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0 analytics-table">
-          <thead><tr><th>Assigned Staff</th><th>Completed</th><th>Pending</th><th>Total Handled</th></tr></thead>
-          <tbody id="productivityTableBody"></tbody>
-        </table>
+    </div>
+
+    <!-- Document Location Load - Full Width -->
+    <div class="row">
+      <div class="col-12">
+        <div class="exec-metric-card exec-location-card">
+          <div class="row align-items-center">
+            <!-- Summary Side -->
+            <div class="col-lg-3 border-end exec-location-summary">
+              <div class="exec-card-title mb-3">Document Location Load</div>
+              <div class="exec-metric-value exec-total-value" id="locationLoadTotal">0</div>
+              <div class="exec-location-primary-name" id="locationTopName">—</div>
+              <div class="exec-location-badge">Primary Location</div>
+              <div class="exec-metric-desc">Current document counts by location buckets</div>
+            </div>
+            <!-- List Side -->
+            <div class="col-lg-9 ps-lg-4">
+              <div id="locationLoadBars" class="exec-location-list">
+                <!-- Location rows rendered here -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Assigned Staff Activity - Redesigned to match test.html -->
+    <section class="exec-staff-card">
+      <div class="exec-staff-header">
+        <div class="exec-staff-title">
+          <div class="exec-staff-icon"><i data-lucide="users" class="icon-20"></i></div>
+          Assigned Staff Activity
+        </div>
+        <div class="exec-staff-meta">Total Pending Workload, Counts</div>
+      </div>
+
+      <div class="row align-items-center">
+        <!-- Left Content: Metrics and Table -->
+        <div class="col-lg-6">
+          <div class="exec-stat-label">Total Backlog Volume</div>
+          <div class="exec-stat-value" id="staffTotalVolume">0</div>
+
+          <div class="exec-staff-table-wrapper">
+            <table class="exec-staff-table">
+              <thead>
+                <tr>
+                  <th>Assigned Staff</th>
+                  <th style="text-align: right;">Comp</th>
+                  <th style="text-align: right;">Pend</th>
+                  <th style="text-align: right;">Total</th>
+                </tr>
+              </thead>
+              <tbody id="staffActivityTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Right Content: Ring Chart Visualization -->
+        <div class="col-lg-6">
+          <div class="exec-chart-container">
+            <svg width="320" height="320" class="exec-ring-svg" id="staffRingChart">
+              <!-- Background track -->
+              <circle cx="160" cy="160" r="120" stroke="#f0f0f0" stroke-width="35" fill="transparent" />
+              <!-- Segments rendered dynamically -->
+            </svg>
+
+            <!-- Floating Labels -->
+            <div class="exec-data-labels" id="staffDataLabels"></div>
+          </div>
+        </div>
       </div>
     </section>
   </section>

@@ -11,12 +11,12 @@ var View = {
   statusBadgeHtml: function(statusValue) {
     var category = Model.getVerificationCategory(statusValue);
     if (category === "verified") {
-      return "<span class='status-chip verified' title='Verified'><i class='bi bi-check-circle-fill'></i>Verified</span>";
+      return "<span class='badge-status status-verified' title='Verified'><i class='fa-solid fa-circle-check'></i> Verified</span>";
     }
     if (category === "deficiency") {
-      return "<span class='status-chip deficiency' title='Deficiency'><i class='bi bi-exclamation-triangle-fill'></i>Deficiency</span>";
+      return "<span class='badge-status status-deficiency' title='Deficiency'><i class='fa-solid fa-triangle-exclamation'></i> Deficiency</span>";
     }
-    return "<span class='status-chip unverified' title='Unverified'><i class='bi bi-dash-circle-fill'></i>Unverified</span>";
+    return "<span class='badge-status status-unverified' title='Unverified'><i class='fa-solid fa-circle-minus'></i> Unverified</span>";
   },
 
   getEl: function(id) {
@@ -41,10 +41,17 @@ var View = {
       resultsId: "searchResults",
       mobileId: "searchResultsMobile",
       statusId: "statusText",
-      paginationId: "pagination",
+      paginationId: "paginationContainer",
       pageInputId: "pageJumpInput",
       pageMetaId: "pageMeta",
-      overlayId: "loadingOverlay"
+      overlayId: "loadingOverlay",
+      filterBuilderMain: "filterBuilderMain",
+      filterTagsMain: "filterTagsMain",
+      filterPopoverMain: "filterPopoverMain",
+      addFilterBtnMain: "addFilterBtnMain",
+      filterAllMain: "filterAllMain",
+      filterClearMain: "filterClearMain",
+      filterDoneMain: "filterDoneMain"
     };
   },
 
@@ -302,49 +309,6 @@ var View = {
   },
 
   renderPositionFieldSchema: function() {
-    var container = this.getEl("positionFieldPlaceholderList");
-    var meta = this.getEl("positionFieldMeta");
-    if (!container) return;
-    var schema = Model.userPositionFieldSchema || {};
-    var fields = Array.isArray(schema.placeholderFields) ? schema.placeholderFields : [];
-
-    if (meta) {
-      if (schema.position || schema.profileId) {
-        meta.textContent = [schema.position || "No position", schema.profileId || "No profile"].join(" | ");
-      } else {
-        meta.textContent = "";
-      }
-    }
-
-    if (!schema.knownUser) {
-      container.innerHTML = "<div class='position-field-empty'>No matched user session yet. Check the browser console for account debug details.</div>";
-      return;
-    }
-    if (schema.denyReason && !fields.length) {
-      container.innerHTML = "<div class='position-field-empty'>" + this.escapeHtml(schema.denyReason) + "</div>";
-      return;
-    }
-    if (!fields.length) {
-      container.innerHTML = "<div class='position-field-empty'>No additional Data Types fields are mapped to your position yet.</div>";
-      return;
-    }
-
-    container.innerHTML = fields.map(function(field) {
-      var className = field.className ? "<div class='position-field-subline'>Class: " + View.escapeHtml(field.className) + "</div>" : "";
-      var stageLabel = field.stageLabel ? "<div class='position-field-subline'>Stage: " + View.escapeHtml(field.stageLabel) + "</div>" : "";
-      return "<div class='position-field-card'>" +
-        "<div class='position-field-header'>" +
-          "<div>" +
-            "<div class='position-field-title'>" + View.escapeHtml(field.name || "") + "</div>" +
-            "<div class='position-field-subtitle'>" + View.escapeHtml(field.type || "text") + "</div>" +
-          "</div>" +
-          "<div class='position-field-ops'>" + View.getFieldOperationBadgesHtml(field) + "</div>" +
-        "</div>" +
-        className +
-        stageLabel +
-        "<div class='position-field-control'>" + View.buildPlaceholderControlHtml(field) + "</div>" +
-      "</div>";
-    }).join("");
   },
 
   buildFieldValueControlHtml: function(field, value) {
@@ -373,39 +337,6 @@ var View = {
   },
 
   renderPositionRecordValues: function(student) {
-    var container = this.getEl("positionFieldPlaceholderList");
-    var meta = this.getEl("positionFieldMeta");
-    var description = this.getEl("positionFieldDescription");
-    if (!container) return;
-    var config = this.getRecordViewConfig();
-    var fields = Array.isArray(config.modalFields) ? config.modalFields : [];
-
-    if (meta) {
-      meta.textContent = [config.position || Model.accessContext.position || "No position", config.profileId || Model.accessContext.profileId || "No profile"].join(" | ");
-    }
-    if (description) {
-      description.textContent = "These fields are visible for your matched position and show the current database values.";
-    }
-    if (!fields.length) {
-      container.innerHTML = "<div class='position-field-empty'>No Data Types fields are visible for this position yet.</div>";
-      return;
-    }
-
-    container.innerHTML = fields.map(function(field) {
-      var value = student ? student[field.name] : "";
-      var className = field.className ? "<div class='position-field-subline'>Class: " + View.escapeHtml(field.className) + "</div>" : "";
-      return "<div class='position-field-card'>" +
-        "<div class='position-field-header'>" +
-          "<div>" +
-            "<div class='position-field-title'>" + View.escapeHtml(field.label || field.name || "") + "</div>" +
-            "<div class='position-field-subtitle'>" + View.escapeHtml(field.type || "text") + "</div>" +
-          "</div>" +
-          "<div class='position-field-ops'>" + View.getFieldOperationBadgesHtml(field) + "</div>" +
-        "</div>" +
-        className +
-        "<div class='position-field-control'>" + View.buildFieldValueControlHtml(field, value) + "</div>" +
-      "</div>";
-    }).join("");
   },
 
   renderTypingModule: function() {
@@ -811,9 +742,9 @@ var View = {
       var hasSO = !!String(r["SO No."] || "").trim();
       var tr = document.createElement("tr");
       tr.dataset.row = r._row;
-      tr.innerHTML = "<td>" + cell(r.ID || "") + "</td>" +
-                     "<td>" + cell((r["Name of the Student"] || "") + (hasSO ? View.soIndicatorHtml() : "")) + "</td>" +
-                     "<td>" + cell(r.HEI || "") + "</td>" +
+      tr.innerHTML = "<td class='id-col'>" + cell(r.ID || "") + "</td>" +
+                     "<td class='name-col'>" + cell((r["Name of the Student"] || "") + (hasSO ? View.soIndicatorHtml() : "")) + "</td>" +
+                     "<td class='hei-col'>" + cell(r.HEI || "") + "</td>" +
                      "<td>" + cell(r["Verification: Date Received"] || "") + "</td>" +
                      "<td>" + cell(r["Verification: Date Accomplished"] || "") + "</td>" +
                      "<td>" + cell(View.statusBadgeHtml(r["Verification Status"])) + "</td>" +
@@ -894,15 +825,15 @@ var View = {
     var end = Math.min(totalPages, start + maxVisible - 1);
     if (end - start < maxVisible - 1) start = Math.max(1, end - maxVisible + 1);
 
-    if (current > 1) container.innerHTML += "<button onclick='Controller.renderPage(" + (current - 1) + ")'>&laquo; Prev</button>";
-    if (start > 1) container.innerHTML += "<button onclick='Controller.renderPage(1)'>1</button>" + (start > 2 ? "<span>...</span>" : "");
+    if (current > 1) container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(" + (current - 1) + ")'><i class='fa-solid fa-chevron-left'></i></button>";
+    if (start > 1) container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(1)'>1</button>" + (start > 2 ? "<span class='text-muted mx-1'>...</span>" : "");
 
     for (var i = start; i <= end; i++) {
-      container.innerHTML += "<button onclick='Controller.renderPage(" + i + ")' class='" + (i === current ? "active-page" : "") + "'>" + i + "</button>";
+      container.innerHTML += "<button type='button' class='page-btn" + (i === current ? " active" : "") + "' onclick='Controller.renderPage(" + i + ")'>" + i + "</button>";
     }
 
-    if (end < totalPages) container.innerHTML += (end < totalPages - 1 ? "<span>...</span>" : "") + "<button onclick='Controller.renderPage(" + totalPages + ")'>" + totalPages + "</button>";
-    if (current < totalPages) container.innerHTML += "<button onclick='Controller.renderPage(" + (current + 1) + ")'>Next &raquo;</button>";
+    if (end < totalPages) container.innerHTML += (end < totalPages - 1 ? "<span class='text-muted mx-1'>...</span>" : "") + "<button type='button' class='page-btn' onclick='Controller.renderPage(" + totalPages + ")'>" + totalPages + "</button>";
+    if (current < totalPages) container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(" + (current + 1) + ")'><i class='fa-solid fa-chevron-right'></i></button>";
 
   },
 
@@ -1157,7 +1088,15 @@ var View = {
 
   renderSelectedBatchList: function() {
     var container = this.getEl("selectedBatchList");
+    var countBadge = this.getEl("selectedCountBadge");
     if (!container) return;
+    
+    // Update count badge
+    if (countBadge) {
+      var count = Model.batchStudents.length;
+      countBadge.textContent = count + " Student" + (count !== 1 ? "s" : "");
+    }
+    
     container.innerHTML = "";
     if (Model.batchStudents.length > 0) {
       container.style.maxHeight = "430px";
@@ -1325,9 +1264,6 @@ var View = {
       if (batchPanel) batchPanel.classList.add("d-none");
       if (saveBtn) saveBtn.classList.add("d-none");
       if (updateBtn) updateBtn.classList.add("d-none");
-      if (description) {
-        description.textContent = "These fields are visible for your matched position and show the current database values.";
-      }
       this.clearModalActionError("updateStudentBtn");
       this.clearModalActionError("savebtn");
       return;
@@ -1336,9 +1272,6 @@ var View = {
     if (batchPanel) batchPanel.classList.remove("d-none");
     if (saveBtn) saveBtn.classList.remove("d-none");
     if (updateBtn) updateBtn.classList.remove("d-none");
-    if (description) {
-      description.textContent = "These fields come from Data Types for your matched position. Only the current Issuance fields above are bound to live record data for now.";
-    }
     var access = Model.accessContext || {};
     var permissions = Model.currentRecordPermissions || {};
     var editable = Array.isArray(permissions.editableFieldKeys) ? permissions.editableFieldKeys : [];

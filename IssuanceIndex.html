@@ -42,94 +42,86 @@
 <main class="container page-shell">
   <section id="homeView" class="home-view">
   <div id="issuanceHomeContent">
-  <!-- NEW SEARCH FILTER CARD -->
-  <div class="search-filter-card">
-    <div class="search-filter-layout">
-      <div class="filter-row">
-        <div class="filter-builder" id="filterBuilderMain">
-          <div id="filterTagsMain" class="main-filter-tags"></div>
-          <button class="add-filter-btn" type="button" id="addFilterBtnMain">+ Add filter</button>
-          <div class="filter-popover" id="filterPopoverMain">
-            <div class="main-filter-title">Filter Students</div>
-            <div class="main-filter-subtitle">Main table filters</div>
-            <div class="main-filter-form">
-              <label class="filter-option"><input type="checkbox" name="filterMainOption" value="verified"> Verified</label>
-              <label class="filter-option"><input type="checkbox" name="filterMainOption" value="deficiency"> Deficiency</label>
-              <label class="filter-option"><input type="checkbox" name="filterMainOption" value="unverified"> Unverified</label>
-            </div>
-            <div class="main-filter-actions">
-              <button type="button" class="btn btn-sm btn-outline-secondary" id="filterAllMain">All</button>
-              <button type="button" class="btn btn-sm btn-outline-secondary" id="filterClearMain">Clear</button>
-              <button type="button" class="btn btn-sm btn-primary" id="filterDoneMain">Done</button>
-            </div>
-          </div>
-        </div>
-        <select id="statusFilterMain" class="d-none" title="Verification status filter">
-          <option value="all">All statuses</option>
-          <option value="verified">Verified Only</option>
-          <option value="deficiency">Deficiency Only</option>
-        </select>
-      </div>
-      <div class="search-row">
-        <div class="search-shell flex-grow-1">
-          <input type="text" id="searchInput" class="form-control form-control-lg rounded-4" placeholder="Search by Student Name">
-          <button class="btn btn-outline-secondary search-clear-inside" type="button" id="searchClearBtn" title="Clear search"><i class="bi bi-x-lg"></i></button>
-        </div>
-        <button class="btn btn-gradient rounded-4 search-action-btn" onclick="doSearch()" title="Search"><i class="bi bi-search"></i> Search</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- NEW TABLE CARD -->
-  <div class="table-card">
-    <div id="loadingOverlay" class="loading-overlay">
-      <span class="inline-table-loader">
-        <span class="spinner-border spinner-border-sm" role="status"></span>
-        <span>Loading data...</span>
-      </span>
+  <!-- STUDENT VERIFICATION LEDGER -->
+  <div class="ledger-container">
+    <!-- Year Tabs Navigation -->
+    <div class="tab-nav-container">
+      <ul class="nav-tabs-custom" id="yearTabsContainer">
+        <!-- Year tabs will be dynamically generated based on available data -->
+      </ul>
     </div>
 
-    <div class="table-inner-padding search-student-card">
-      <div class="search-table-shell">
-        <div id="searchResultsMobile" class="search-results-mobile"></div>
-        <div class="table-responsive search-table-scroll">
-          <table id="searchTable" class="table table-hover align-middle mb-0">
-            <thead class="bg-primary text-white">
-              <tr id="searchTableHeaderRow">
-                <th>ID</th>
-                <th>Name</th>
-                <th>HEI</th>
-                <th>Verification: Date Received</th>
-                <th>Verification: Date Accomplished</th>
-                <th>Verification Status</th>
-                <th>Verification: Date Forwarded</th>
-                <th>Assigned Person</th>
-              </tr>
-            </thead>
-            <tbody id="searchResults">
-              <tr id="searchSpinnerRow" style="display:none;">
-                <td colspan="8" class="text-center py-5">
-                  <div class="inline-table-loader">
-                    <div class="spinner-border" role="status" style="color: var(--primary); width:1.6rem; height:1.6rem;"></div>
-                    <div class="fw-bold text-gradient fs-6" id="spinnerText">Searching...</div>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <div id="saveIndicator" class="save-indicator"></div>
-        </div>
-        <div class="search-table-footer">
-          <div id="statusText" class="search-footer-status text-muted"></div>
-          <nav class="search-footer-pagination" aria-label="Table pagination">
-            <ul class="pagination justify-content-center mb-0" id="pagination"></ul>
-          </nav>
-          <div class="search-footer-jump">
-            <span id="pageMeta" class="text-muted small"></span>
-            <input id="pageJumpInput" type="number" class="form-control form-control-sm" min="1" value="1">
-            <button id="pageJumpBtn" class="btn btn-sm btn-outline-secondary">Go</button>
+    <!-- Search & Filter Header -->
+    <div class="search-header-simple">
+      <div style="position: relative; flex-grow: 1;">
+        <i class="fa-solid fa-magnifying-glass" style="position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: var(--slate-grey);"></i>
+        <input type="text" id="searchInput" class="form-control-search-simple" placeholder="Search by student name or ID...">
+      </div>
+      <div class="filter-builder" id="filterBuilderMain" style="position: relative;">
+        <button class="btn-filter-outline" id="addFilterBtnMain" type="button">
+          <i class="fa-solid fa-filter me-2"></i>Filters
+        </button>
+        <div class="filter-popover" id="filterPopoverMain" style="right: 0; left: auto;">
+          <div class="main-filter-title">Filter Students</div>
+          <div class="main-filter-subtitle">Main table filters</div>
+          <div class="main-filter-form">
+            <label class="filter-option"><input type="checkbox" name="filterMainOption" value="verified"> Verified</label>
+            <label class="filter-option"><input type="checkbox" name="filterMainOption" value="deficiency"> Deficiency</label>
+            <label class="filter-option"><input type="checkbox" name="filterMainOption" value="unverified"> Unverified</label>
+          </div>
+          <div class="main-filter-actions">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="filterAllMain">All</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="filterClearMain">Clear</button>
+            <button type="button" class="btn btn-sm btn-primary" id="filterDoneMain">Done</button>
           </div>
         </div>
+      </div>
+      <button class="btn-report" id="exportBtn">
+        <i class="fa-solid fa-download me-2"></i>Report
+      </button>
+    </div>
+
+    <!-- Table -->
+    <div class="table-wrapper">
+      <table id="searchTable" class="table-modern">
+        <thead>
+          <tr id="searchTableHeaderRow">
+            <th>ID</th>
+            <th>Student Name</th>
+            <th>HEI (Institution)</th>
+            <th>Received</th>
+            <th>Accomplished</th>
+            <th>Status</th>
+            <th>Forwarded</th>
+            <th>Assigned</th>
+          </tr>
+        </thead>
+        <tbody id="searchResults">
+          <tr id="searchSpinnerRow" style="display:none;">
+            <td colspan="8" class="text-center py-5">
+              <div class="inline-table-loader">
+                <div class="spinner-border" role="status" style="color: var(--primary); width:1.6rem; height:1.6rem;"></div>
+                <div class="fw-bold text-gradient fs-6" id="spinnerText">Searching...</div>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div id="saveIndicator" class="save-indicator"></div>
+    </div>
+
+    <!-- Footer Pagination -->
+    <div class="footer-nav">
+      <div class="text-muted small fw-600" id="statusText">
+        Showing <span class="text-dark">0</span> of 0 records
+      </div>
+      <div class="d-flex gap-2 align-items-center" id="paginationContainer">
+        <!-- Pagination buttons will be dynamically generated here -->
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <span class="small text-muted">Go to</span>
+        <input id="pageJumpInput" type="text" class="form-control form-control-sm text-center" style="width: 45px; border-radius: 6px;" value="1">
+        <button id="pageJumpBtn" class="btn btn-sm btn-dark px-3">Go</button>
       </div>
     </div>
   </div>
@@ -142,102 +134,109 @@
 
 <!-- Modal for editing student -->
 <div id="editModal" class="modal">
-  <div class="modal-content modal-edit-layout rounded shadow bg-white">
-    <div class="left-panel student-modal-panel">
-      <h4>Student Information</h4>
-      <div id="studentSummary" class="mb-3"></div>
-      <p class="text-muted fst-italic">
-        Double-check the dates and remarks before saving. Leave empty if not applicable.
-      </p>
-      <hr>
-      <div id="developerIssuanceSection">
-        <div class="mt-3 d-flex justify-content-between gap-2">
-          <h5>Issuance & Encoding</h5>
-        </div>
-        <div class="mb-2">
-          <label>Issuance: Date Received: <span class="required-indicator">*</span></label>
-          <input id="issuance_date_received" type="date" class="form-control">
-          <div id="error_issuance_date_received" class="field-error-msg" aria-live="polite"></div>
-        </div>
-        <div class="mb-2">
-          <label>Issuance: Date Accomplished: <span class="required-indicator">*</span></label>
-          <input id="issuance_date_accomplished" type="date" class="form-control">
-          <div id="error_issuance_date_accomplished" class="field-error-msg" aria-live="polite"></div>
-        </div>
-        <div class="mb-2">
-          <label>Issuance: Status: <span class="required-indicator">*</span></label>
-          <input list="issuance_status_options" id="issuance_status" class="form-control">
-          <datalist id="issuance_status_options">
-            <option value="Approved"></option>
-            <option value="Pending"></option>
-          </datalist>
-          <div id="error_issuance_status" class="field-error-msg" aria-live="polite"></div>
-        </div>
-        <div class="mb-2">
-          <label>Issuance: Remarks:</label>
-          <input id="issuance_remarks" type="text" class="form-control">
-          <div id="error_issuance_remarks" class="field-error-msg" aria-live="polite"></div>
-        </div>
-        <div class="mb-2">
-          <label>Issuance: Date Forwarded: <span class="required-indicator">*</span></label>
-          <input id="issuance_date_forwarded" type="date" class="form-control">
-          <div id="error_issuance_date_forwarded" class="field-error-msg" aria-live="polite"></div>
-        </div>
-        <div class="mb-2">
-          <label>SO No.: <span class="required-indicator">*</span></label>
-          <input id="so_prefix" list="so_prefix_list" class="form-control" style="width:120px; display:inline-block;">
-          <datalist id="so_prefix_list"></datalist>
-          <span>-</span>
-          <input id="so_number" type="text" class="form-control" style="width:120px; display:inline-block;">
-          <div id="error_so_prefix" class="field-error-msg" aria-live="polite"></div>
-        </div>
-        <div class="mb-2">
-          <label for="edit_series">Series: <span class="required-indicator">*</span></label>
-          <select id="edit_series" name="edit_series" class="form-control"></select>
-          <div id="error_edit_series" class="field-error-msg" aria-live="polite"></div>
-        </div>
-        <div class="mb-2">
-          <label>Date of SO Issuance: <span class="required-indicator">*</span></label>
-          <input id="edit_date_so_issuance" type="date" class="form-control" onchange="prefillIssuanceFields()">
-          <div id="error_edit_date_so_issuance" class="field-error-msg" aria-live="polite"></div>
-        </div>
+  <div class="modal-content modal-edit-layout">
+    <!-- Header -->
+    <div class="section-header d-flex justify-content-between align-items-center">
+      <div class="student-meta">
+        <h4>Student Information</h4>
+        <div id="studentSummary" class="d-flex align-items-center gap-2"></div>
       </div>
-      <hr>
-      <div class="mt-3 d-flex justify-content-between gap-2 align-items-center">
-        <h5 class="mb-0">Fields For Your Position</h5>
-        <span id="positionFieldMeta" class="position-field-meta"></span>
-      </div>
-      <p id="positionFieldDescription" class="text-muted small mb-2">
-        These fields come from <code>Data Types</code> for your matched position. Only the current Issuance fields above are bound to live record data for now.
-      </p>
-      <div id="positionFieldPlaceholderList" class="position-field-list"></div>
-      <div id="saveActionError" class="action-error-msg" aria-live="polite"></div>
-      <div class="mt-3 d-flex justify-content-end gap-2">
-        <button class="btn btn-secondary" onclick="closeEditModal()"><i class="bi bi-x-circle"></i> Cancel</button>
-        <button id="savebtn" class="btn btn-gradient" onclick="saveEdit()" disabled><i class="bi bi-save"></i> Save</button>
+      <div class="text-end">
+        <p class="text-muted small mb-0">Double-check the dates and remarks before saving.</p>
+        <p class="text-muted small fst-italic">Leave empty if not applicable.</p>
       </div>
     </div>
-    <div class="right-panel batch-modal-panel" id="batchPanel">
+
+    <div class="row g-0">
+      <!-- Form Area -->
+      <div class="col-lg-7 form-container">
+        <h5 class="fw-bold mb-4" style="color: var(--prussian-blue);">Issuance & Encoding</h5>
+        
+        <div class="row g-4">
+          <div class="col-md-6">
+            <label class="form-label-custom">Date Received <span class="text-danger">*</span></label>
+            <input id="issuance_date_received" type="date" class="form-control-custom">
+            <div id="error_issuance_date_received" class="field-error-msg" aria-live="polite"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label-custom">Date Accomplished <span class="text-danger">*</span></label>
+            <input id="issuance_date_accomplished" type="date" class="form-control-custom">
+            <div id="error_issuance_date_accomplished" class="field-error-msg" aria-live="polite"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label-custom">Issuance Status <span class="text-danger">*</span></label>
+            <input list="issuance_status_options" id="issuance_status" class="form-control-custom">
+            <datalist id="issuance_status_options">
+              <option value="Approved"></option>
+              <option value="Pending"></option>
+            </datalist>
+            <div id="error_issuance_status" class="field-error-msg" aria-live="polite"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label-custom">Date Forwarded <span class="text-danger">*</span></label>
+            <input id="issuance_date_forwarded" type="date" class="form-control-custom">
+            <div id="error_issuance_date_forwarded" class="field-error-msg" aria-live="polite"></div>
+          </div>
+          <div class="col-12">
+            <label class="form-label-custom">SO No. <span class="text-danger">*</span></label>
+            <div class="d-flex align-items-center gap-2">
+              <input id="so_prefix" list="so_prefix_list" class="form-control-custom" style="flex: 1;">
+              <datalist id="so_prefix_list"></datalist>
+              <span class="fw-bold">-</span>
+              <input id="so_number" type="text" class="form-control-custom" style="flex: 1;">
+            </div>
+            <div id="error_so_prefix" class="field-error-msg" aria-live="polite"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label-custom">Series <span class="text-danger">*</span></label>
+            <select id="edit_series" name="edit_series" class="form-control-custom"></select>
+            <div id="error_edit_series" class="field-error-msg" aria-live="polite"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label-custom">Date of SO Issuance <span class="text-danger">*</span></label>
+            <input id="edit_date_so_issuance" type="date" class="form-control-custom" onchange="prefillIssuanceFields()">
+            <div id="error_edit_date_so_issuance" class="field-error-msg" aria-live="polite"></div>
+          </div>
+          <div class="col-12">
+            <label class="form-label-custom">Remarks</label>
+            <input id="issuance_remarks" type="text" class="form-control-custom" placeholder="Enter optional notes...">
+            <div id="error_issuance_remarks" class="field-error-msg" aria-live="polite"></div>
+          </div>
+        </div>
+        
+        <div id="saveActionError" class="action-error-msg mt-3" aria-live="polite"></div>
+      </div>
+      
+      <!-- Sidebar/Batch Panel -->
+      <div class="col-lg-5 sidebar-container" id="batchPanel">
       <h5>Add Student to Batch</h5>
+      <!-- Search Row -->
       <div class="row g-2 mb-2">
-        <div class="col-8">
+        <div class="col-12">
           <div class="search-shell">
             <input type="text" id="batchSearchInput" class="form-control" placeholder="Search student...">
             <button class="btn btn-outline-secondary search-clear-inside" type="button" id="batchSearchClearBtn" title="Clear search"><i class="bi bi-x-lg"></i></button>
           </div>
         </div>
-        <div class="col-4 d-flex justify-content-end">
+      </div>
+      <!-- Filter Row -->
+      <div class="row g-2 mb-2">
+        <div class="col-12">
           <div class="filter-builder" id="filterBuilderModal">
-            <div id="filterTagsModal"></div>
+            <div id="filterTagsModal" class="filter-pills"></div>
             <button class="add-filter-btn" type="button" id="addFilterBtnModal">+ Add filter</button>
             <div class="filter-popover" id="filterPopoverModal">
-              <label class="filter-option"><input type="checkbox" name="filterModalOption" value="verified"> Verified</label>
-              <label class="filter-option"><input type="checkbox" name="filterModalOption" value="deficiency"> Deficiency</label>
-              <label class="filter-option"><input type="checkbox" name="filterModalOption" value="unverified"> Unverified</label>
-              <div class="text-end mt-2">
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="filterAllModal" style="font-size: 12px;">All</button>
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="filterClearModal" style="font-size: 12px;">Clear</button>
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="filterDoneModal" style="font-size: 12px;">Done</button>
+              <div class="main-filter-title">Filter Students</div>
+              <div class="main-filter-subtitle">Modal table filters</div>
+              <div class="main-filter-form">
+                <label class="filter-option"><input type="checkbox" name="filterModalOption" value="verified"> Verified</label>
+                <label class="filter-option"><input type="checkbox" name="filterModalOption" value="deficiency"> Deficiency</label>
+                <label class="filter-option"><input type="checkbox" name="filterModalOption" value="unverified"> Unverified</label>
+              </div>
+              <div class="main-filter-actions">
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="filterAllModal">All</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="filterClearModal">Clear</button>
+                <button type="button" class="btn btn-sm btn-primary" id="filterDoneModal">Done</button>
               </div>
             </div>
           </div>
@@ -260,11 +259,28 @@
         </table>
       </div>
       <hr>
-      <h6>Selected Students</h6>
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h6 class="mb-0 fw-bold">Selected Students</h6>
+        <span class="badge rounded-pill bg-white text-dark border px-3" id="selectedCountBadge">0 Students</span>
+      </div>
       <div class="pe-auto" id="selectedBatchList"></div>
-      <div id="updateActionError" class="action-error-msg" aria-live="polite"></div>
-      <div class="right-panel-footer">
-        <button id="updateStudentBtn" class="btn btn-primary btn-sm" onclick="confirmPreviewUpdate()">
+      
+      <!-- Empty State Placeholder -->
+      <div id="emptyStatePlaceholder" class="empty-state-placeholder">
+        <i class="bi bi-person-plus mb-2 fs-4"></i>
+        <p class="small mb-0">Search to add more students</p>
+      </div>
+      
+      <div id="updateActionError" class="action-error-msg mt-3" aria-live="polite"></div>
+    </div>
+    </div>
+    
+    <!-- Footer -->
+    <div class="modal-footer-custom">
+      <button class="btn-cancel" onclick="closeEditModal()"><i class="bi bi-x-circle"></i> Cancel</button>
+      <div class="d-flex gap-2">
+        <button id="savebtn" class="btn-save" onclick="saveEdit()" disabled><i class="bi bi-save"></i> Save</button>
+        <button id="updateStudentBtn" class="btn-save" onclick="confirmPreviewUpdate()">
           <i class="bi bi-check2-circle"></i> Update
         </button>
       </div>
@@ -325,10 +341,8 @@
 <?!= HtmlService.createHtmlOutputFromFile('IssuanceService').getContent(); ?>
 <?!= HtmlService.createHtmlOutputFromFile('IssuanceView').getContent(); ?>
 <?!= HtmlService.createHtmlOutputFromFile('IssuanceController').getContent(); ?>
-<?!= HtmlService.createHtmlOutputFromFile('IssuanceView').getContent(); ?>
-<?!= HtmlService.createHtmlOutputFromFile('IssuanceController').getContent(); ?>
-<?!= HtmlService.createHtmlOutputFromFile('DashboardView').getContent(); ?>
-<?!= HtmlService.createHtmlOutputFromFile('DashboardController').getContent(); ?>
+<?!= HtmlService.createHtmlOutputFromFile('IssuanceReport').getContent(); ?>
+
 
 </body>
 </html>

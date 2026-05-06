@@ -22,6 +22,19 @@ var TypingModel = {
   batchHasChanges: false,
   verificationFilterMain: ["verified", "deficiency", "unverified"],
   verificationFilterModal: ["verified", "deficiency", "unverified"],
+  yearFilter: "all",
+  
+  /* ============================================
+     YEAR-BASED DATA MANAGEMENT
+     ============================================ */
+  availableYears: [],        // All years from server (['2026', '2025', ...])
+  loadedYears: [],          // Years with full data loaded
+  loadingYears: [],         // Years currently being loaded
+  yearDataMap: {},          // { '2026': [...rows], '2025': [...] }
+  yearLoadState: {},        // { '2026': 'loaded', '2025': 'unloaded' }
+  currentYear: null,        // Currently selected year
+  yearBatchProgress: {},    // { '2026': { nextStartRow: 1001, hasMore: true } }
+  
   activeBatchSearchToken: 0,
   lastMainSearchTerm: "",
   lastBatchSearchTerm: "",

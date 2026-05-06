@@ -1,3 +1,7 @@
+// Global variables from Google Apps Script project properties
+// @ts-ignore - Declared in project settings
+var SPREADSHEET_ID, TYPING_SPREADSHEET_ID;
+
 const spreadsheetID = "1p865Qx9OSNj0E2yU_z4YYz3kJbnT50E_zH9Ll1euGPs";
 const BIGQUERY_PROJECT_ID = "sodium-shard-459702-t9";
 const BIGQUERY_LOCATION = "US";
@@ -984,7 +988,7 @@ function getTypingRecordViewConfig_() {
 function getCurrentRecordViewConfig_() {
   const userContext = getCurrentUserContext_();
   const normalizedPosition = String(userContext.position || "").trim().toLowerCase();
-  if (normalizedPosition === "developer") {
+  if (normalizedPosition === "developer" || normalizedPosition === "verifier") {
     return getDeveloperRecordViewConfig_();
   }
   if (normalizedPosition === "releasing/verifier") {
@@ -2365,10 +2369,6 @@ function getDashboardData(filters) {
 
 // ========== Executive Dashboard Migration: Core Utilities ==========
 
-function toTrimmedString_(value) {
-  return value == null ? "" : String(value).trim();
-}
-
 function buildSql_(lines) {
   return lines.filter(function(line) { return line != null && String(line).trim() !== ""; }).join("\n");
 }
@@ -2456,21 +2456,11 @@ function normalizeFilterValue_(value) {
   return trimmed;
 }
 
-function normalizeToken_(value) {
-  return toTrimmedString_(value).toLowerCase().replace(/\s+/g, " ");
-}
-
 function normalizeDatePresetValue_(value) {
   var preset = toTrimmedString_(value) || "allTime";
   var validPresets = ["allTime", "thisYear", "yearToDate", "last30Days", "last90Days", "specificDate"];
   if (validPresets.indexOf(preset) !== -1) return preset;
   return "thisYear";
-}
-
-function normalizeDateValue_(value) {
-  var trimmed = toTrimmedString_(value);
-  if (!trimmed || !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return "";
-  return trimmed;
 }
 
 function resolveDashboardDatePresetRange_(datePreset, dateFrom, dateTo) {
@@ -4576,95 +4566,6 @@ function getCachedDashboardReferenceData_() {
 function cacheDashboardReferenceData_(referenceData) {
   var cache = CacheService.getScriptCache();
   cache.put(getDashboardReferenceCacheKey_(), JSON.stringify(referenceData), DASHBOARD_REFERENCE_CACHE_TTL_SECONDS);
-}
-
-function buildStaticConfig_(staticData) {
-  var config = {
-    applicationStatuses: [],
-    es2Owners: [],
-    es2Programs: {},
-    programOwners: {}
-  };
-  if (!staticData || staticData.length < 2) return config;
-
-  var headers = staticData[0] || [];
-  var statusIndex = headers.indexOf("Application Status");
-  var es2Index = headers.indexOf("ES II Owner");
-  var programIndex = headers.indexOf("Program");
-
-  for (var i = 1; i < staticData.length; i++) {
-    var row = staticData[i];
-    if (statusIndex >= 0 && row[statusIndex]) config.applicationStatuses.push(String(row[statusIndex]).trim());
-    if (es2Index >= 0 && row[es2Index]) {
-      var es2Owner = String(row[es2Index]).trim();
-      config.es2Owners.push(es2Owner);
-      if (programIndex >= 0 && row[programIndex]) {
-        var program = String(row[programIndex]).trim();
-        config.es2Programs[program] = es2Owner;
-        config.programOwners[program] = es2Owner;
-      }
-    }
-  }
-
-  // Remove duplicates
-  config.applicationStatuses = config.applicationStatuses.filter(function(v, i, a) { return a.indexOf(v) === i; });
-  config.es2Owners = config.es2Owners.filter(function(v, i, a) { return a.indexOf(v) === i; });
-
-  return config;
-}
-
-function buildUserDirectory_(usersData) {
-  var directory = { names: [], emailMap: {} };
-  if (!usersData || usersData.length < 2) return directory;
-
-  var headers = usersData[0] || [];
-  var nameIndex = headers.indexOf("Name");
-  var emailIndex = headers.indexOf("Email");
-
-  for (var i = 1; i < usersData.length; i++) {
-    var row = usersData[i];
-    if (nameIndex >= 0 && row[nameIndex]) {
-      var name = String(row[nameIndex]).trim();
-      directory.names.push(name);
-      if (emailIndex >= 0 && row[emailIndex]) {
-        directory.emailMap[name] = String(row[emailIndex]).trim();
-      }
-    }
-  }
-
-  return directory;
-}
-
-function buildDataTypesConfig_(dataTypesData) {
-  var config = { transactionTypes: ["Walk-In", "Online"], aliasMap: {} };
-  if (!dataTypesData || dataTypesData.length < 2) return config;
-
-  var headers = dataTypesData[0] || [];
-  var typeIndex = headers.indexOf("Transaction Type");
-  var aliasIndex = headers.indexOf("Alias");
-
-  for (var i = 1; i < dataTypesData.length; i++) {
-    var row = dataTypesData[i];
-    if (typeIndex >= 0 && row[typeIndex]) {
-      var typeName = String(row[typeIndex]).trim();
-      if (config.transactionTypes.indexOf(typeName) === -1) {
-        config.transactionTypes.push(typeName);
-      }
-      if (aliasIndex >= 0 && row[aliasIndex]) {
-        config.aliasMap[String(row[aliasIndex]).trim().toLowerCase()] = typeName;
-      }
-    }
-  }
-
-  return config;
-}
-
-function readWholeSheet_(sheet) {
-  if (!sheet) return [];
-  var lastRow = sheet.getLastRow();
-  var lastCol = sheet.getLastColumn();
-  if (lastRow < 1 || lastCol < 1) return [];
-  return sheet.getRange(1, 1, lastRow, lastCol).getValues();
 }
 
 function safelyGetBigQueryTotalCount_(filters, options) {
@@ -6779,4 +6680,249 @@ function debugTurnaroundQueryDirect() {
     var r4 = BigQuery.Jobs.query({ query: query4, useLegacySql: false }, BIGQUERY_PROJECT_ID);
     Logger.log("[TEST4] Stage columns: jobComplete=" + r4.jobComplete + " rows=" + JSON.stringify(r4.rows));
   } catch(e) { Logger.log("[TEST4] Stage columns ERROR: " + e.toString()); }
+}
+
+/* ============================================
+   YEAR-BASED DATA LOADING FUNCTIONS
+   ============================================ */
+
+/**
+ * Extract all unique years from the Date Received column
+ * Returns sorted array of years (descending): ['2026', '2025', '2024', ...]
+ */
+function getAvailableYears_(module) {
+  var spreadsheetID = getSpreadsheetID_(module);
+  var sheetName = getSheetName_(module);
+  var ss = SpreadsheetApp.openById(spreadsheetID);
+  var sheet = ss.getSheetByName(sheetName);
+  
+  if (!sheet) {
+    return { success: false, error: "Sheet not found", years: [] };
+  }
+  
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) {
+    return { success: true, years: [] };
+  }
+  
+  // Find Date Received column index
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var dateReceivedColName = (module === "issuance") ? "Verification: Date Received" : "Date Received";
+  var dateColumnIndex = headers.indexOf(dateReceivedColName);
+  
+  if (dateColumnIndex === -1) {
+    // Try alternative column names
+    for (var i = 0; i < headers.length; i++) {
+      var header = String(headers[i] || "").toLowerCase();
+      if (header.indexOf("date received") !== -1 || header.indexOf("received") !== -1) {
+        dateColumnIndex = i;
+        break;
+      }
+    }
+  }
+  
+  if (dateColumnIndex === -1) {
+    return { success: false, error: "Date Received column not found", years: [] };
+  }
+  
+  // Extract years from Date Received column (more efficient than loading all data)
+  var dateValues = sheet.getRange(2, dateColumnIndex + 1, lastRow - 1, 1).getValues();
+  var yearSet = {}; // Use object as Set (ES5 compatible)
+  
+  for (var i = 0; i < dateValues.length; i++) {
+    var dateValue = dateValues[i][0];
+    if (dateValue) {
+      var year = new Date(dateValue).getFullYear();
+      if (!isNaN(year) && year > 2000 && year < 2100) {
+        yearSet[year] = true; // Add to "set"
+      }
+    }
+  }
+  
+  // Convert to sorted array (descending)
+  var years = Object.keys(yearSet).map(function(y) { return parseInt(y); }).sort(function(a, b) { return b - a; });
+  
+  return { 
+    success: true, 
+    years: years,
+    count: years.length
+  };
+}
+
+/**
+ * Get summary info for all years (year + count)
+ */
+function getYearsSummary_(module) {
+  var spreadsheetID = getSpreadsheetID_(module);
+  var sheetName = getSheetName_(module);
+  var ss = SpreadsheetApp.openById(spreadsheetID);
+  var sheet = ss.getSheetByName(sheetName);
+  
+  if (!sheet || sheet.getLastRow() <= 1) {
+    return { success: true, summaries: [] };
+  }
+  
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var dateReceivedColName = (module === "issuance") ? "Verification: Date Received" : "Date Received";
+  var dateColumnIndex = headers.indexOf(dateReceivedColName);
+  
+  // Fallback column detection
+  if (dateColumnIndex === -1) {
+    for (var i = 0; i < headers.length; i++) {
+      var header = String(headers[i] || "").toLowerCase();
+      if (header.indexOf("date received") !== -1 || header.indexOf("received") !== -1) {
+        dateColumnIndex = i;
+        break;
+      }
+    }
+  }
+  
+  if (dateColumnIndex === -1) {
+    return { success: false, error: "Date Received column not found" };
+  }
+  
+  var lastRow = sheet.getLastRow();
+  var dateValues = sheet.getRange(2, dateColumnIndex + 1, lastRow - 1, 1).getValues();
+  
+  var yearCounts = {};
+  for (var i = 0; i < dateValues.length; i++) {
+    var dateValue = dateValues[i][0];
+    if (dateValue) {
+      var year = new Date(dateValue).getFullYear();
+      if (!isNaN(year) && year > 2000 && year < 2100) {
+        yearCounts[year] = (yearCounts[year] || 0) + 1;
+      }
+    }
+  }
+  
+  var summaries = Object.keys(yearCounts).map(function(year) {
+    return {
+      year: parseInt(year),
+      count: yearCounts[year],
+      loaded: false
+    };
+  }).sort(function(a, b) { return b.year - a.year; });
+  
+  return { success: true, summaries: summaries };
+}
+
+/**
+ * Get data filtered by specific year
+ */
+function getDataByYear_(module, year, batchSize, startRow) {
+  if (!batchSize) batchSize = 1000;
+  if (!startRow) startRow = 2;
+  
+  var spreadsheetID = getSpreadsheetID_(module);
+  var sheetName = getSheetName_(module);
+  var viewConfig = getCurrentRecordViewConfig_(module);
+  var ss = SpreadsheetApp.openById(spreadsheetID);
+  var sheet = ss.getSheetByName(sheetName);
+  
+  if (!sheet) {
+    return { success: false, error: "Sheet not found", data: [], total: 0 };
+  }
+  
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var dateReceivedColName = (module === "issuance") ? "Verification: Date Received" : "Date Received";
+  var dateColumnIndex = headers.indexOf(dateReceivedColName);
+  
+  // Fallback column detection
+  if (dateColumnIndex === -1) {
+    for (var i = 0; i < headers.length; i++) {
+      var header = String(headers[i] || "").toLowerCase();
+      if (header.indexOf("date received") !== -1 || header.indexOf("received") !== -1) {
+        dateColumnIndex = i;
+        break;
+      }
+    }
+  }
+  
+  if (dateColumnIndex === -1) {
+    return { success: false, error: "Date Received column not found", data: [], total: 0 };
+  }
+  
+  var targetYear = parseInt(year);
+  var lastRow = sheet.getLastRow();
+  var allRows = sheet.getRange(startRow, 1, Math.min(batchSize, lastRow - startRow + 1), sheet.getLastColumn()).getValues();
+  
+  var yearRows = [];
+  var nextStartRow = startRow;
+  
+  for (var i = 0; i < allRows.length; i++) {
+    var dateValue = allRows[i][dateColumnIndex];
+    if (dateValue) {
+      var rowYear = new Date(dateValue).getFullYear();
+      if (rowYear === targetYear) {
+        var rowData = {};
+        for (var j = 0; j < headers.length; j++) {
+          rowData[headers[j]] = allRows[i][j];
+        }
+        rowData._row = startRow + i;
+        rowData._year = targetYear;
+        yearRows.push(rowData);
+      }
+    }
+    nextStartRow = startRow + i + 1;
+  }
+  
+  // Count total for this year
+  var allDateValues = sheet.getRange(2, dateColumnIndex + 1, lastRow - 1, 1).getValues();
+  var yearTotal = 0;
+  for (var i = 0; i < allDateValues.length; i++) {
+    var dateValue = allDateValues[i][0];
+    if (dateValue && new Date(dateValue).getFullYear() === targetYear) {
+      yearTotal++;
+    }
+  }
+  
+  return {
+    success: true,
+    data: yearRows,
+    total: yearTotal,
+    year: year,
+    nextStartRow: nextStartRow,
+    hasMore: nextStartRow <= lastRow,
+    viewConfig: viewConfig
+  };
+}
+
+/**
+ * Load remaining data for a specific year (pagination within year)
+ */
+function loadRemainingDataByYear_(module, year, startRow, batchSize) {
+  return getDataByYear_(module, year, batchSize, startRow);
+}
+
+/* Helper functions for module-specific configuration */
+function getSpreadsheetID_(module) {
+  // Return appropriate spreadsheet ID based on module
+  if (module === "issuance") {
+    return typeof SPREADSHEET_ID !== 'undefined' ? SPREADSHEET_ID : null;
+  } else if (module === "typing") {
+    return typeof TYPING_SPREADSHEET_ID !== 'undefined' ? TYPING_SPREADSHEET_ID : null;
+  }
+  return null;
+}
+
+function getSheetName_(module) {
+  // Return appropriate sheet name based on module
+  if (module === "issuance") {
+    return "Verification Logsheet"; // or appropriate sheet name
+  } else if (module === "typing") {
+    return "Typing Records"; // or appropriate sheet name
+  }
+  return "Sheet1";
+}
+
+function getCurrentRecordViewConfig_(module) {
+  // Return appropriate view config
+  return {
+    mode: "standard",
+    supportsBatchAdd: true,
+    supportsExport: true,
+    dataColumns: [],
+    tableColumns: [],
+    modalFields: []
+  };
 }

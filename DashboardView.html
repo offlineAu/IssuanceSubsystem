@@ -2265,14 +2265,40 @@ var View = {
       }.bind(this)).join("") + "</tr>";
     }
     if (Model.dom.detailModalTableBody) {
-      Model.dom.detailModalTableBody.innerHTML = records.length ? records.map(function(record) {
-        return "<tr>" + columns.map(function(column) {
+      Model.dom.detailModalTableBody.innerHTML = records.length ? records.map(function(record, rowIndex) {
+        return "<tr>" + columns.map(function(column, colIndex) {
           var value = record[column.field];
           if (value === null || value === undefined) value = "";
-          return "<td>" + this.escapeHtml(String(value)) + "</td>";
+          var strValue = this.escapeHtml(String(value));
+          // Apply styling based on column position
+          if (colIndex === 0) {
+            // Record ID - monospace styling
+            return '<td class="id-text">' + strValue + '</td>';
+          } else if (colIndex === 1) {
+            // Student Name - bold
+            return '<td class="fw-bold">' + strValue + '</td>';
+          } else if (column.field.toLowerCase().includes('status') || column.label.toLowerCase().includes('status')) {
+            // Status column - apply badge styling
+            var statusClass = this.getStatusBadgeClass(strValue);
+            return '<td><span class="status-badge ' + statusClass + '">' + strValue + '</span></td>';
+          } else {
+            return "<td>" + strValue + "</td>";
+          }
         }.bind(this)).join("") + "</tr>";
       }.bind(this)).join("") : '<tr><td colspan="' + columns.length + '" class="text-center text-muted py-4">No records found</td></tr>';
     }
+  },
+
+  getStatusBadgeClass: function(status) {
+    var normalized = String(status || "").toLowerCase().trim();
+    if (normalized.includes('evaluation') || normalized.includes('pending')) {
+      return 'status-evaluation';
+    } else if (normalized.includes('processed') || normalized.includes('complete') || normalized.includes('done')) {
+      return 'status-processed';
+    } else if (normalized.includes('cancel') || normalized.includes('reject')) {
+      return 'status-cancelled';
+    }
+    return '';
   },
 
   renderDetailModalPagination: function(pagination) {
@@ -2573,14 +2599,7 @@ var View = {
       '<div style="display:flex;flex-direction:row;gap:0;border-radius:20px;overflow:hidden;min-height:320px;">' +
 
         // Hero panel
-        '<div style="' +
-          'background:linear-gradient(160deg,#0066FF 0%,#0044CC 100%);' +
-          'width:35%;min-width:160px;max-width:240px;' +
-          'padding:20px 16px;color:#fff;' +
-          'display:flex;flex-direction:column;align-items:center;text-align:center;' +
-          'border-radius:20px;box-shadow:0px -1px 24px 4px rgba(0,76,255,0.3);' +
-          'margin-right:-20px;z-index:2;' +
-        '">' +
+        '<div class="top-programs-hero">' +
           '<div style="background:#fff;width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#0056D2;margin-bottom:14px;box-shadow:0 6px 16px rgba(0,0,0,0.12);">' +
             '<i data-lucide="' + getProgramIcon(top.label || top.program) + '" style="width:28px;height:28px;" stroke-width="2"></i>' +
           '</div>' +
@@ -2599,20 +2618,14 @@ var View = {
         '</div>' +
 
         // List panel
-        '<div style="' +
-          'flex:1;min-width:0;' +
-          'padding:20px 20px 20px 36px;' +
-          'background:#fff;border-radius:20px;' +
-          'box-shadow:0 4px 16px rgba(15,23,42,0.07);' +
-          'z-index:1;overflow:hidden;' +
-        '">' +
+        '<div class="top-programs-list-panel">' + // Replaced huge style string with class
           '<div style="font-weight:700;font-size:1rem;color:#1E293B;margin-bottom:4px;">Programs</div>' +
           '<div style="color:#64748B;font-size:0.72rem;margin-bottom:14px;">Ranked by application volume</div>' +
           '<div style="display:flex;flex-direction:column;gap:0;max-height:240px;overflow-y:auto;padding-right:6px;">' +
             rest.map(function(row, idx) {
               var rank = idx + 2;
               var name = row.label || row.program || "—";
-              var val  = row.value || row.total || 0;
+              var val = row.value || row.total || 0;
               return '<div style="display:flex;align-items:center;padding:8px 0;border-bottom:1px solid #f1f5f9;">' +
                 '<div style="position:relative;width:36px;height:36px;background:#F1F5F9;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#94A3B8;margin-right:12px;flex-shrink:0;">' +
                   '<i data-lucide="' + getProgramIcon(name) + '" style="width:16px;height:16px;" stroke-width="2"></i>' +
@@ -2626,7 +2639,7 @@ var View = {
             }).join('') +
           '</div>' +
         '</div>' +
-      '</div>';
+        '</div>';
 
     setTimeout(function() {
       if (window.lucide && typeof lucide.createIcons === 'function') {

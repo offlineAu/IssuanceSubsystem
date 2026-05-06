@@ -24,7 +24,14 @@ var TypingView = {
       paginationId: "typingPagination",
       pageInputId: "typingPageJumpInput",
       pageMetaId: "typingPageMeta",
-      overlayId: "typingLoadingOverlay"
+      overlayId: "typingLoadingOverlay",
+      filterBuilderMain: "filterBuilderMain",
+      filterTagsMain: "filterTagsMain",
+      filterPopoverMain: "filterPopoverMain",
+      addFilterBtnMain: "addFilterBtnMain",
+      filterAllMain: "filterAllMain",
+      filterClearMain: "filterClearMain",
+      filterDoneMain: "filterDoneMain"
     };
   },
 
@@ -194,15 +201,15 @@ var TypingView = {
     var end = Math.min(totalPages, start + maxVisible - 1);
     if (end - start < maxVisible - 1) start = Math.max(1, end - maxVisible + 1);
 
-    if (current > 1) container.innerHTML += "<button onclick='Controller.renderPage(" + (current - 1) + ")'>&laquo; Prev</button>";
-    if (start > 1) container.innerHTML += "<button onclick='Controller.renderPage(1)'>1</button>" + (start > 2 ? "<span>...</span>" : "");
+    if (current > 1) container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(" + (current - 1) + ")'><i class='fa-solid fa-chevron-left'></i></button>";
+    if (start > 1) container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(1)'>1</button>" + (start > 2 ? "<span class='text-muted mx-1'>...</span>" : "");
 
     for (var i = start; i <= end; i++) {
-      container.innerHTML += "<button onclick='Controller.renderPage(" + i + ")' class='" + (i === current ? "active-page" : "") + "'>" + i + "</button>";
+      container.innerHTML += "<button type='button' class='page-btn" + (i === current ? " active" : "") + "' onclick='Controller.renderPage(" + i + ")'>" + i + "</button>";
     }
 
-    if (end < totalPages) container.innerHTML += (end < totalPages - 1 ? "<span>...</span>" : "") + "<button onclick='Controller.renderPage(" + totalPages + ")'>" + totalPages + "</button>";
-    if (current < totalPages) container.innerHTML += "<button onclick='Controller.renderPage(" + (current + 1) + ")'>Next &raquo;</button>";
+    if (end < totalPages) container.innerHTML += (end < totalPages - 1 ? "<span class='text-muted mx-1'>...</span>" : "") + "<button type='button' class='page-btn' onclick='Controller.renderPage(" + totalPages + ")'>" + totalPages + "</button>";
+    if (current < totalPages) container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(" + (current + 1) + ")'><i class='fa-solid fa-chevron-right'></i></button>";
   },
 
   updateStatusText: function() {

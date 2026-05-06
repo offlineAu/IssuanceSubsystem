@@ -1467,4 +1467,241 @@ body {
 .search-table-scroll {
   max-height: none !important;
 }
+
+/* ============================================
+   TYPING RECORDS LEDGER (Issuance Style)
+   ============================================ */
+
+/* --- Main Container --- */
+.ledger-container {
+  background: white;
+  border-radius: 20px;
+  box-shadow: 0 10px 40px rgba(11, 29, 55, 0.1);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-width: 1800px;
+  margin: 0 auto;
+}
+
+/* --- Top Bar Styling --- */
+.search-header {
+  padding: 25px 30px;
+  background: #fff;
+  border-bottom: 1px solid #EDF2F7;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.search-box {
+  flex-grow: 1;
+  position: relative;
+}
+
+.search-box i {
+  position: absolute;
+  left: 15px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--slate-grey);
+}
+
+.form-control-search {
+  padding: 12px 12px 12px 45px;
+  border-radius: 12px;
+  border: 1px solid #E2E8F0;
+  background: var(--bg-soft);
+  font-size: 0.9rem;
+  width: 100%;
+  transition: all 0.2s;
+}
+
+.form-control-search:focus {
+  background: white;
+  border-color: var(--camel);
+  box-shadow: 0 0 0 3px rgba(172, 144, 85, 0.1);
+  outline: none;
+}
+
+/* --- Table Styles --- */
+.table-wrapper {
+  overflow-x: auto;
+}
+
+.table-modern {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0;
+}
+
+.table-modern thead th {
+  background: #F8FAFC;
+  color: var(--slate-grey);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 15px 20px;
+  border-bottom: 2px solid #EDF2F7;
+  white-space: nowrap;
+}
+
+.table-modern tbody td {
+  padding: 16px 20px;
+  font-size: 0.85rem;
+  color: var(--prussian-blue);
+  border-bottom: 1px solid #EDF2F7;
+  vertical-align: middle;
+}
+
+.table-modern tbody tr:hover {
+  background-color: rgba(172, 144, 85, 0.03);
+}
+
+/* --- Footer --- */
+.footer-nav {
+  padding: 20px 30px;
+  background: #fff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid #EDF2F7;
+}
+
+.page-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #E2E8F0;
+  background: white;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--prussian-blue);
+  transition: all 0.2s;
+  text-decoration: none;
+}
+
+.page-btn:hover { background: var(--bg-soft); border-color: var(--camel); color: var(--camel); }
+.page-btn.active { background: var(--prussian-blue); color: white; border-color: var(--prussian-blue); }
+
+/* --- Filter Builder (from Issuance) --- */
+.filter-builder {
+  position: relative;
+}
+
+.filter-popover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: white;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  z-index: 1000;
+  padding: 12px;
+  min-width: 200px;
+  display: none;
+}
+
+.filter-popover.show {
+  display: block;
+}
+
+.main-filter-title {
+  font-weight: 700;
+  color: var(--prussian-blue);
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.main-filter-subtitle {
+  color: var(--slate-grey);
+  font-size: 0.8rem;
+  margin-bottom: 12px;
+}
+
+.main-filter-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-option {
+  display: block;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.filter-option input {
+  margin-right: 8px;
+}
+
+.main-filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+.add-filter-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--camel);
+  background: white;
+  color: var(--camel);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.add-filter-btn:hover {
+  background: var(--bg-soft);
+  border-color: var(--camel);
+}
+
+/* --- Filter Pills --- */
+.filter-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.filter-chip,
+.filter-chip-main,
+.filter-chip-modal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(11, 29, 55, 0.05) !important;
+  color: var(--prussian-blue) !important;
+  border: 1px solid rgba(11, 29, 55, 0.1) !important;
+  border-radius: 100px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin: 2px;
+}
+
+.filter-chip button,
+.filter-chip-main button,
+.filter-chip-modal button {
+  background: none !important;
+  border: none;
+  color: var(--slate-grey);
+  cursor: pointer;
+  padding: 2px;
+  margin-left: 4px;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.filter-chip button:hover,
+.filter-chip-main button:hover,
+.filter-chip-modal button:hover {
+  opacity: 1;
+}
 </style>

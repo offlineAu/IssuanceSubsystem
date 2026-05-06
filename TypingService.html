@@ -8,6 +8,34 @@ var TypingService = {
     google.script.run.withSuccessHandler(onSuccess).routeModule("typing", "loadRemainingData", { startRow: startRow, batchSize: batchSize });
   },
 
+  /* ============================================
+     YEAR-BASED DATA LOADING METHODS
+     ============================================ */
+
+  getAvailableYears: function(onSuccess) {
+    google.script.run
+      .withSuccessHandler(onSuccess || function(){})
+      .getAvailableYears_("typing");
+  },
+
+  getYearsSummary: function(onSuccess) {
+    google.script.run
+      .withSuccessHandler(onSuccess || function(){})
+      .getYearsSummary_("typing");
+  },
+
+  getDataByYear: function(year, batchSize, onSuccess) {
+    google.script.run
+      .withSuccessHandler(onSuccess || function(){})
+      .getDataByYear_("typing", year, batchSize);
+  },
+
+  loadRemainingDataByYear: function(year, startRow, batchSize, onSuccess) {
+    google.script.run
+      .withSuccessHandler(onSuccess || function(){})
+      .loadRemainingDataByYear_("typing", year, startRow, batchSize);
+  },
+
   searchExactName: function(term, onSuccess) {
     google.script.run.withSuccessHandler(onSuccess).routeModule("typing", "searchExactName", { searchTerm: term });
   },

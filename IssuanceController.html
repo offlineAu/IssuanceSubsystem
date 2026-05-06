@@ -194,34 +194,127 @@ var Controller = {
     this.exitModule((Model.executionLock && Model.executionLock.activeModule) || null);
     var requestId = this.enterModule(targetModule);
     View.showOverlay(true);
-    this.tryIssuanceRoute("fetch", { batchSize: Model.initialBatchSize }, this.guardModuleCallback(targetModule, requestId, function(res) {
-      Model.recordViewConfig = res.viewConfig || Model.recordViewConfig;
-      View.applyRecordViewConfig();
-      Model.fullData = res.data;
-      Model.totalRows = res.total;
-      Model.filteredData = Model.applyMainViewFilters(Model.fullData);
-      Controller.renderPage(1);
-      View.showOverlay(false);
-
-      Model.loadingBatches = true;
-      Model.nextBatchStart = 2 + Model.fullData.length;
-      Controller.loadNextBatch(Model.nextBatchStart);
-    }), function() {
-      Service.getInitialData(Model.initialBatchSize, Controller.guardModuleCallback(targetModule, requestId, function(res){
-        var normalized = Controller.normalizeIssuanceExecutionResult("fetch", res, "legacy");
-        var data = normalized.data || {};
-        Model.recordViewConfig = data.viewConfig || Model.recordViewConfig;
-        View.applyRecordViewConfig();
-        Model.fullData = data.data;
-        Model.totalRows = data.total;
-        Model.filteredData = Model.applyMainViewFilters(Model.fullData);
-        Controller.renderPage(1);
+    
+    // Step 1: Get available years from server
+    Service.getYearsSummary(Controller.guardModuleCallback(targetModule, requestId, function(yearSummary) {
+      if (!yearSummary || !yearSummary.summaries || yearSummary.summaries.length === 0) {
+        // No data available
+        Model.availableYears = [];
+        Model.yearDataMap = {};
+        Model.filteredData = [];
+        Controller.renderYearTabs();
         View.showOverlay(false);
+        return;
+      }
+      
+      // Store available years
+      Model.availableYears = yearSummary.summaries.map(function(s) { return String(s.year); });
+      Model.yearLoadState = {};
+      yearSummary.summaries.forEach(function(s) {
+        Model.yearLoadState[s.year] = 'unloaded';
+        Model.yearDataMap[s.year] = [];
+      });
+      
+      // Render year tabs immediately (no "All Years", just specific years)
+      Controller.renderYearTabs();
+      
+      // Step 2: Load the 2 latest years fully
+      var latestYears = yearSummary.summaries.slice(0, 2); // Take first 2 (sorted desc)
+      
+      if (latestYears.length > 0) {
+        var firstYear = latestYears[0].year;
+        Model.currentYear = String(firstYear);
+        
+        // Load first latest year
+        Controller.loadYearData(String(firstYear), function() {
+          // After first year loaded, load second year if exists
+          if (latestYears.length > 1) {
+            var secondYear = latestYears[1].year;
+            Controller.loadYearData(String(secondYear), function() {
+              View.showOverlay(false);
+              // Start background loading summary for remaining years
+              Controller.updateYearTabCounts();
+            });
+          } else {
+            View.showOverlay(false);
+            Controller.updateYearTabCounts();
+          }
+        });
+      } else {
+        View.showOverlay(false);
+      }
+    }));
+  },
 
-        Model.loadingBatches = true;
-        Model.nextBatchStart = 2 + Model.fullData.length;
-        Controller.loadNextBatch(Model.nextBatchStart);
-      }));
+  // Load data for a specific year
+  loadYearData: function(year, onComplete) {
+    if (Model.yearLoadState[year] === 'loading' || Model.yearLoadState[year] === 'loaded') {
+      if (onComplete) onComplete();
+      return;
+    }
+    
+    Model.yearLoadState[year] = 'loading';
+    Model.loadingYears.push(year);
+    Controller.renderYearTabs(); // Show loading state
+    
+    var batchSize = Model.initialBatchSize || 1000;
+    Service.getDataByYear(year, batchSize, function(res) {
+      if (res && res.success) {
+        Model.yearDataMap[year] = res.data || [];
+        Model.yearLoadState[year] = 'loaded';
+        Model.loadedYears.push(year);
+        
+        // Update batch progress for this year
+        Model.yearBatchProgress[year] = {
+          nextStartRow: res.nextStartRow || 2,
+          hasMore: res.hasMore || false,
+          total: res.total || 0
+        };
+        
+        // If this is the current year, render it
+        if (Model.currentYear === year) {
+          Model.filteredData = Model.applyMainViewFilters(Model.yearDataMap[year]);
+          Controller.renderPage(1);
+        }
+      }
+      
+      // Remove from loading list
+      Model.loadingYears = Model.loadingYears.filter(function(y) { return y !== year; });
+      Controller.renderYearTabs(); // Update to show loaded state
+      
+      if (onComplete) onComplete();
+    });
+  },
+
+  // Update year tab counts (background operation)
+  updateYearTabCounts: function() {
+    // This would fetch summary counts for remaining years
+    // For now, we rely on the initial summary data
+  },
+
+  // Load next batch for a specific year
+  loadNextBatchForYear: function(year) {
+    var progress = Model.yearBatchProgress[year];
+    if (!progress || !progress.hasMore || Model.yearLoadState[year] !== 'loaded') {
+      return;
+    }
+    
+    Service.loadRemainingDataByYear(year, progress.nextStartRow, Model.nextBatchSize, function(res) {
+      if (res && res.success && res.data) {
+        // Append new data to existing year data
+        Model.yearDataMap[year] = Model.yearDataMap[year].concat(res.data);
+        Model.yearBatchProgress[year] = {
+          nextStartRow: res.nextStartRow,
+          hasMore: res.hasMore,
+          total: res.total
+        };
+        
+        // Refresh if this is current year
+        if (Model.currentYear === year) {
+          Model.filteredData = Model.applyMainViewFilters(Model.yearDataMap[year]);
+          Controller.renderPage(Model.currentPage);
+        }
+      }
     });
   },
 
@@ -284,15 +377,18 @@ var Controller = {
     Model.lastMainSearchTerm = term;
     Model.isSearchingMain = false;
 
+    var currentYear = Model.currentYear;
+    var yearData = Model.yearDataMap[currentYear] || [];
+    
     if (!term) {
       Model.searchMode = false;
-      Model.filteredData = Model.applyMainViewFilters(Model.fullData);
+      Model.filteredData = Model.applyMainViewFilters(yearData);
       this.renderPage(1);
       return;
     }
 
     Model.searchMode = true;
-    var localMatch = Model.fullData.filter(function(r){
+    var localMatch = yearData.filter(function(r){
       return r["Name of the Student"] && r["Name of the Student"].toLowerCase().includes(term);
     });
     var filteredLocal = Model.applyMainViewFilters(localMatch);
@@ -301,46 +397,23 @@ var Controller = {
       Model.filteredData = Model.removeDuplicates(filteredLocal);
       this.renderPage(1);
     } else {
-      var shouldFetchServer = Model.fullData.length < Model.totalRows || Model.loadingBatches;
+      // Check if current year has more data to fetch
+      var currentYearProgress = Model.yearBatchProgress[currentYear];
+      var shouldFetchServer = currentYearProgress && currentYearProgress.hasMore;
+      
       if (!shouldFetchServer) {
-        View.renderEmpty("No records found");
+        View.renderEmpty("No records found in " + currentYear);
         return;
       }
 
       Model.isSearchingMain = true;
       View.showMainSearchLoading();
-      this.tryIssuanceRoute("fetch", { searchTerm: term }, this.guardModuleCallback(targetModule, requestId, function(res) {
-        if (token !== Model.activeSearchToken) return;
+      
+      // Load more data for the current year and then search
+      Controller.loadNextBatchForYear(currentYear, function() {
         Model.isSearchingMain = false;
-        if (res && res.length) {
-          var filteredRemote = Model.applyMainViewFilters(res);
-          if (!filteredRemote.length) {
-            View.renderEmpty("No records found");
-            return;
-          }
-          Model.filteredData = Model.removeDuplicates(filteredRemote);
-          Controller.renderPage(1);
-        } else {
-          View.renderEmpty("No records found");
-        }
-      }), function() {
-        Service.searchExactName(term, Controller.guardModuleCallback(targetModule, requestId, function(res){
-          if (token !== Model.activeSearchToken) return;
-          var normalized = Controller.normalizeIssuanceExecutionResult("search", res, "legacy");
-          res = normalized.data;
-          Model.isSearchingMain = false;
-          if (res && res.length) {
-            var filteredRemote = Model.applyMainViewFilters(res);
-            if (!filteredRemote.length) {
-              View.renderEmpty("No records found");
-              return;
-            }
-            Model.filteredData = Model.removeDuplicates(filteredRemote);
-            Controller.renderPage(1);
-          } else {
-            View.renderEmpty("No records found");
-          }
-        }));
+        // Re-run search with newly loaded data
+        Controller.doSearch(term);
       });
     }
   },
@@ -1686,8 +1759,18 @@ var Controller = {
 
     var addFilterBtnMain = document.getElementById("addFilterBtnMain");
     var addFilterBtnModal = document.getElementById("addFilterBtnModal");
+    var filterBuilderMain = document.getElementById("filterBuilderMain");
+    var filterTagsMain = document.getElementById("filterTagsMain");
     var filterPopoverMain = document.getElementById("filterPopoverMain");
-    var filterPopoverModal = document.getElementById("filterPopoverModal");
+    var filterDoneMain = document.getElementById("filterDoneMain");
+    var filterDoneModal = document.getElementById("filterDoneModal");
+    var filterAllMain = document.getElementById("filterAllMain");
+    var filterAllModal = document.getElementById("filterAllModal");
+    var filterClearMain = document.getElementById("filterClearMain");
+    var filterClearModal = document.getElementById("filterClearModal");
+    var mainRadioOptions = document.querySelectorAll("input[name='filterMainOption']");
+    var modalRadioOptions = document.querySelectorAll("input[name='filterModalOption']");
+    var filterPopoverMain = document.getElementById("filterPopoverMain");
     var filterDoneMain = document.getElementById("filterDoneMain");
     var filterDoneModal = document.getElementById("filterDoneModal");
     var filterAllMain = document.getElementById("filterAllMain");
@@ -1866,6 +1949,122 @@ var Controller = {
     }
 
     View.updateActionButtons();
+
+    // Initialize year tabs event listeners
+    this.initYearTabs();
+  },
+
+  // Year Tabs Functions
+  initYearTabs: function() {
+    var yearTabsContainer = document.getElementById("yearTabsContainer");
+    if (!yearTabsContainer) return;
+
+    yearTabsContainer.addEventListener("click", function(e) {
+      var btn = e.target.closest("button[data-year]");
+      if (!btn) return;
+
+      var year = btn.getAttribute("data-year");
+      
+      // Check if year needs to be loaded first
+      var loadState = Model.yearLoadState[year];
+      if (loadState === 'unloaded') {
+        // Lazy load this year
+        Controller.loadYearData(year, function() {
+          Controller.switchToYear(year);
+        });
+        return;
+      }
+      
+      // Already loaded, just switch
+      Controller.switchToYear(year);
+    });
+  },
+
+  switchToYear: function(year) {
+    var yearTabsContainer = document.getElementById("yearTabsContainer");
+    
+    // Update active state in UI
+    if (yearTabsContainer) {
+      yearTabsContainer.querySelectorAll(".nav-link").forEach(function(link) {
+        link.classList.remove("active");
+        if (link.getAttribute("data-year") === year) {
+          link.classList.add("active");
+        }
+      });
+    }
+    
+    // Update model
+    Model.currentYear = year;
+    
+    // If year data is loaded, show it
+    if (Model.yearLoadState[year] === 'loaded' && Model.yearDataMap[year]) {
+      Model.filteredData = Model.applyMainViewFilters(Model.yearDataMap[year]);
+      Controller.renderPage(1);
+    }
+  },
+
+  renderYearTabs: function() {
+    var container = document.getElementById("yearTabsContainer");
+    if (!container) return;
+
+    // Use available years from server summary
+    var availableYears = Model.availableYears || [];
+    var currentYear = Model.currentYear || (availableYears.length > 0 ? availableYears[0] : null);
+    
+    if (availableYears.length === 0) {
+      container.innerHTML = '';
+      return;
+    }
+
+    // Build HTML - no "All Years", just specific years
+    var html = '';
+    
+    availableYears.forEach(function(year) {
+      var isActive = (year === currentYear);
+      var isLoading = Model.loadingYears.indexOf(year) !== -1;
+      var isLoaded = Model.yearLoadState[year] === 'loaded';
+      var loadState = isLoading ? 'loading' : (isLoaded ? 'loaded' : 'unloaded');
+      
+      // Get count from data if loaded, otherwise show spinner or count from summary
+      var count = '';
+      if (isLoaded && Model.yearDataMap[year]) {
+        count = '<span class="badge-year-count">' + Model.yearDataMap[year].length + '</span>';
+      } else if (isLoading) {
+        count = '<span class="spinner-border spinner-border-sm ms-2" role="status"></span>';
+      }
+      
+      html += '<li><button class="nav-link ' + (isActive ? 'active' : '') + ' ' + loadState + '" data-year="' + year + '" data-load-state="' + loadState + '">' + year + count + '</button></li>';
+    });
+
+    container.innerHTML = html;
+  },
+
+  applyYearFilter: function(rows) {
+    // This function is no longer needed with year-based loading
+    // Each year is stored separately, we just switch between them
+    return rows;
+  },
+
+  applyYearFilter: function(rows) {
+    var yearFilter = Model.yearFilter || "all";
+    if (yearFilter === "all") return rows;
+
+    var currentYear = new Date().getFullYear();
+    var years = this.extractYearsFromData(Model.fullData);
+
+    return rows.filter(function(row) {
+      var dateReceived = row["Verification: Date Received"] || row["Date Received"] || "";
+      if (!dateReceived) return false;
+
+      var rowYear = new Date(dateReceived).getFullYear();
+      if (isNaN(rowYear)) return false;
+
+      if (yearFilter === "archive") {
+        return years.archive.indexOf(rowYear) !== -1;
+      }
+
+      return String(rowYear) === yearFilter;
+    });
   }
 };
 </script>

@@ -21,6 +21,29 @@ var Model = {
   batchHasChanges: false,
   verificationFilterMain: ["verified", "deficiency", "unverified"],
   verificationFilterModal: ["verified", "deficiency", "unverified"],
+  yearFilter: "all",
+  filters: {
+    es2InCharge: "",
+    program: "",
+    applicationStatus: [],
+    transactionType: "",
+    hei: "",
+    dateFrom: "",
+    dateTo: "",
+    datePreset: "thisYear"
+  },
+  
+  /* ============================================
+     YEAR-BASED DATA MANAGEMENT
+     ============================================ */
+  availableYears: [],        // All years from server (['2026', '2025', ...])
+  loadedYears: [],          // Years with full data loaded
+  loadingYears: [],         // Years currently being loaded
+  yearDataMap: {},          // { '2026': [...rows], '2025': [...] }
+  yearLoadState: {},        // { '2026': 'loaded', '2025': 'unloaded' }
+  currentYear: null,        // Currently selected year
+  yearBatchProgress: {},    // { '2026': { nextStartRow: 1001, hasMore: true } }
+  
   activeBatchSearchToken: 0,
   lastMainSearchTerm: "",
   lastBatchSearchTerm: "",
@@ -611,6 +634,28 @@ var Model = {
       entry.fields.soPrefix = basePrefix;
       entry.fields.soNumber = String(nextNumber).padStart(numberWidth, "0");
       usedSo[candidate] = true;
+    });
+  },
+
+  hydrateFromPayload: function(payload) {
+    if (!payload) return;
+    if (payload.rows) this.fullData = payload.rows;
+    if (payload.filteredData) this.filteredData = payload.filteredData;
+    if (payload.hasMore !== undefined) this.hasMore = payload.hasMore;
+    if (payload.summary) this.summary = payload.summary;
+    if (payload.programRows) this.programRows = payload.programRows;
+    if (payload.statusRows) this.statusRows = payload.statusRows;
+    if (payload.locationRows) this.locationRows = payload.locationRows;
+    if (payload.staffRows) this.staffRows = payload.staffRows;
+    if (payload.ownershipRows) this.ownershipRows = payload.ownershipRows;
+    if (payload.sourceDistribution) this.sourceDistribution = payload.sourceDistribution;
+    if (payload.timeRange) this.timeRange = payload.timeRange;
+  },
+
+  filterMonthlyRowsByYear: function(year) {
+    if (!this.fullData || !this.fullData.length) return [];
+    return this.fullData.filter(function(row) {
+      return row.year === year || String(row.year) === String(year);
     });
   }
 };

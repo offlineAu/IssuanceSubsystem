@@ -191,14 +191,18 @@ var Controller = {
 
   initData: function() {
     var targetModule = "issuance";
+    console.log("[IssuanceController] initData started");
     this.exitModule((Model.executionLock && Model.executionLock.activeModule) || null);
     var requestId = this.enterModule(targetModule);
     View.showOverlay(true);
     
     // Step 1: Get available years from server
+    console.log("[IssuanceController] Calling Service.getYearsSummary...");
     Service.getYearsSummary(Controller.guardModuleCallback(targetModule, requestId, function(yearSummary) {
+      console.log("[IssuanceController] getYearsSummary response:", yearSummary);
       if (!yearSummary || !yearSummary.summaries || yearSummary.summaries.length === 0) {
         // No data available
+        console.log("[IssuanceController] No years data available");
         Model.availableYears = [];
         Model.yearDataMap = {};
         Model.filteredData = [];
@@ -248,42 +252,92 @@ var Controller = {
 
   // Load data for a specific year
   loadYearData: function(year, onComplete) {
+    console.log("[IssuanceController] loadYearData called for year:", year);
     if (Model.yearLoadState[year] === 'loading' || Model.yearLoadState[year] === 'loaded') {
+      console.log("[IssuanceController] Year already loading/loaded, skipping");
       if (onComplete) onComplete();
       return;
     }
-    
+
     Model.yearLoadState[year] = 'loading';
     Model.loadingYears.push(year);
-    Controller.renderYearTabs(); // Show loading state
-    
-    var batchSize = Model.initialBatchSize || 1000;
-    Service.getDataByYear(year, batchSize, function(res) {
-      if (res && res.success) {
-        Model.yearDataMap[year] = res.data || [];
-        Model.yearLoadState[year] = 'loaded';
-        Model.loadedYears.push(year);
-        
-        // Update batch progress for this year
-        Model.yearBatchProgress[year] = {
-          nextStartRow: res.nextStartRow || 2,
-          hasMore: res.hasMore || false,
-          total: res.total || 0
-        };
-        
-        // If this is the current year, render it
-        if (Model.currentYear === year) {
-          Model.filteredData = Model.applyMainViewFilters(Model.yearDataMap[year]);
+    Controller.renderYearTabs();
+
+    // Accumulate all records across batches
+    var allRecords = [];
+    var batchSize = 5000;
+
+    function syncLoadedYearRows() {
+      var byRow = {};
+      Model.availableYears.forEach(function(loadedYear) {
+        var rows = Model.yearDataMap[loadedYear] || [];
+        rows.forEach(function(row) {
+          if (row && row._row) byRow[String(row._row)] = row;
+        });
+      });
+      Model.fullData = Object.keys(byRow).map(function(rowKey) {
+        return byRow[rowKey];
+      }).sort(function(a, b) {
+        return Number(a._row) - Number(b._row);
+      });
+    }
+
+    function fetchBatch(nextScanFrom) {
+      console.log("[IssuanceController] Calling Service.getDataByYear for year:", year, "scanFrom:", nextScanFrom);
+      Service.getDataByYear(year, batchSize, nextScanFrom, function(res) {
+        console.log("[IssuanceController] getDataByYear response for year", year, ":", res);
+
+        if (!res || !res.success) {
+          // Failed — store whatever we have so far
+          finalize(allRecords);
+          return;
+        }
+
+        // Accumulate
+        allRecords = allRecords.concat(res.data || []);
+
+        // Update the tab badge with running count so user sees progress
+        Model.yearDataMap[year] = allRecords;
+        syncLoadedYearRows();
+        Controller.renderYearTabs();
+
+        // If current year, render what we have so far
+        if (Model.currentYear === String(year)) {
+          Model.filteredData = Model.applyMainViewFilters(allRecords);
           Controller.renderPage(1);
         }
-      }
-      
-      // Remove from loading list
+
+        if (res.hasMore && res.nextScanFrom && res.nextScanFrom > 0) {
+          // More batches to fetch — recurse
+          fetchBatch(res.nextScanFrom);
+        } else {
+          // Done
+          finalize(allRecords);
+        }
+      });
+    }
+
+    function finalize(records) {
+      Model.yearDataMap[year] = records;
+      syncLoadedYearRows();
+      Model.yearLoadState[year] = 'loaded';
+      Model.yearBatchProgress[year] = { hasMore: false, nextScanFrom: 0, total: records.length };
+
+      console.log("[IssuanceController] Finished loading year", year, "— total records:", records.length);
+
       Model.loadingYears = Model.loadingYears.filter(function(y) { return y !== year; });
-      Controller.renderYearTabs(); // Update to show loaded state
-      
+      Controller.renderYearTabs();
+
+      if (Model.currentYear === String(year)) {
+        Model.filteredData = Model.applyMainViewFilters(records);
+        Controller.renderPage(1);
+      }
+
       if (onComplete) onComplete();
-    });
+    }
+
+    // Start from the bottom of the sheet (no startRow on first call)
+    fetchBatch(undefined);
   },
 
   // Update year tab counts (background operation)
@@ -357,6 +411,12 @@ var Controller = {
 
   goToPage: function(page) {
     this.renderPage(page);
+  },
+
+  findLoadedStudentByRow: function(rowID) {
+    var key = String(rowID || "");
+    return (Model.filteredData || []).find(function(s) { return String(s._row) === key; }) ||
+      (Model.fullData || []).find(function(s) { return String(s._row) === key; });
   },
 
   debounce: function(fn, wait) {
@@ -1827,7 +1887,7 @@ var Controller = {
       resultsTable.addEventListener("click", function(e) {
         var tr = e.target.closest("tr");
         if (tr && tr.dataset.row) {
-          var student = Model.fullData.find(function(s) { return String(s._row) === String(tr.dataset.row); });
+          var student = Controller.findLoadedStudentByRow(tr.dataset.row);
           if (student) Controller.requestOpenStudentEditor(student);
         }
       });
@@ -1837,7 +1897,7 @@ var Controller = {
       resultsMobile.addEventListener("click", function(e) {
         var card = e.target.closest("[data-row]");
         if (card && card.dataset.row) {
-          var student = Model.fullData.find(function(s) { return String(s._row) === String(card.dataset.row); });
+          var student = Controller.findLoadedStudentByRow(card.dataset.row);
           if (student) Controller.requestOpenStudentEditor(student);
         }
       });

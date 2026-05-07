@@ -92,7 +92,7 @@ var Service = {
     google.script.run
       .withSuccessHandler(this.wrapSuccess(context, onSuccess, { years: [] }))
       .withFailureHandler(this.wrapFailure(context, onSuccess, { years: [] }))
-      .getAvailableYears_("issuance");
+      .getAvailableYears("issuance");
   },
 
   getYearsSummary: function(onSuccess) {
@@ -101,22 +101,38 @@ var Service = {
       if (onSuccess) onSuccess({ summaries: [] });
       return;
     }
+    console.log("[IssuanceService] Calling getYearsSummary...");
     google.script.run
-      .withSuccessHandler(this.wrapSuccess(context, onSuccess, { summaries: [] }))
-      .withFailureHandler(this.wrapFailure(context, onSuccess, { summaries: [] }))
-      .getYearsSummary_("issuance");
+      .withSuccessHandler(function(res) {
+        console.log("[IssuanceService] getYearsSummary success:", res);
+        if (onSuccess) onSuccess(res);
+      })
+      .withFailureHandler(function(err) {
+        console.error("[IssuanceService] getYearsSummary failed:", err);
+        if (onSuccess) onSuccess({ summaries: [] });
+      })
+      .getYearsSummary("issuance");
   },
 
-  getDataByYear: function(year, batchSize, onSuccess) {
-    var context = this.buildContext("issuance", "ui");
-    if (!this.assertModuleContext(context.module)) {
-      if (onSuccess) onSuccess({ data: [], total: 0, year: year });
-      return;
+  getDataByYear: function(year, batchSize, nextScanFrom, onSuccess) {
+    if (typeof nextScanFrom === "function") {
+      onSuccess = nextScanFrom;
+      nextScanFrom = undefined;
     }
+
+    // Do NOT use buildContext/wrapSuccess here — the execution lock
+    // moves between the call and the response, blocking valid data
+    console.log("[IssuanceService] Calling getDataByYear for year:", year, "nextScanFrom:", nextScanFrom);
     google.script.run
-      .withSuccessHandler(this.wrapSuccess(context, onSuccess, { data: [], total: 0, year: year }))
-      .withFailureHandler(this.wrapFailure(context, onSuccess, { data: [], total: 0, year: year }))
-      .getDataByYear_("issuance", year, batchSize);
+      .withSuccessHandler(function(res) {
+        console.log("[IssuanceService] getDataByYear success:", res);
+        if (onSuccess) onSuccess(res);
+      })
+      .withFailureHandler(function(err) {
+        console.error("[IssuanceService] getDataByYear failed:", err);
+        if (onSuccess) onSuccess({ data: [], total: 0, year: year, success: false, error: err });
+      })
+      .getDataByYear("issuance", year, batchSize, nextScanFrom);
   },
 
   loadRemainingDataByYear: function(year, startRow, batchSize, onSuccess) {
@@ -126,9 +142,14 @@ var Service = {
       return;
     }
     google.script.run
-      .withSuccessHandler(this.wrapSuccess(context, onSuccess, { data: [], year: year }))
-      .withFailureHandler(this.wrapFailure(context, onSuccess, { data: [], year: year }))
-      .loadRemainingDataByYear_("issuance", year, startRow, batchSize);
+      .withSuccessHandler(function(res) {
+        if (onSuccess) onSuccess(res);
+      })
+      .withFailureHandler(function(err) {
+        console.error("[IssuanceService] loadRemainingDataByYear failed:", err);
+        if (onSuccess) onSuccess({ data: [], year: year, success: false, error: err });
+      })
+      .loadRemainingDataByYear("issuance", year, startRow, batchSize);
   },
 
   searchExactName: function(term, onSuccess) {

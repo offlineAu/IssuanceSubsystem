@@ -40,12 +40,16 @@ var TypingController = {
 
   initData: function(options) {
     var settings = options || {};
+    console.log("[TypingController] initData started");
     if (!settings.silent) View.showOverlay(true);
     
     // Step 1: Get available years from server
+    console.log("[TypingController] Calling Service.getYearsSummary...");
     Service.getYearsSummary(function(yearSummary) {
+      console.log("[TypingController] getYearsSummary response:", yearSummary);
       if (!yearSummary || !yearSummary.summaries || yearSummary.summaries.length === 0) {
         // No data available
+        console.log("[TypingController] No years data available");
         Model.availableYears = [];
         Model.yearDataMap = {};
         Model.filteredData = [];
@@ -91,7 +95,9 @@ var TypingController = {
   },
 
   loadYearData: function(year, onComplete) {
+    console.log("[TypingController] loadYearData called for year:", year);
     if (Model.yearLoadState[year] === 'loading' || Model.yearLoadState[year] === 'loaded') {
+      console.log("[TypingController] Year already loading/loaded, skipping");
       if (onComplete) onComplete();
       return;
     }
@@ -101,7 +107,9 @@ var TypingController = {
     Controller.renderYearTabs(); // Show loading state
     
     var batchSize = Model.initialBatchSize || 1000;
+    console.log("[TypingController] Calling Service.getDataByYear for year:", year);
     Service.getDataByYear(year, batchSize, function(res) {
+      console.log("[TypingController] getDataByYear response for year", year, ":", res);
       if (res && res.success) {
         Model.yearDataMap[year] = res.data || [];
         Model.yearLoadState[year] = 'loaded';
@@ -116,9 +124,12 @@ var TypingController = {
         
         // If this is the current year, render it
         if (Model.currentYear === year) {
+          console.log("[TypingController] Rendering current year:", year);
           Model.filteredData = Model.applyMainViewFilters(Model.yearDataMap[year]);
           Controller.renderPage(1);
         }
+      } else {
+        console.error("[TypingController] getDataByYear failed or returned no success for year", year);
       }
       
       // Remove from loading list

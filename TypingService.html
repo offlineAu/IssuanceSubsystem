@@ -15,25 +15,41 @@ var TypingService = {
   getAvailableYears: function(onSuccess) {
     google.script.run
       .withSuccessHandler(onSuccess || function(){})
-      .getAvailableYears_("typing");
+      .withFailureHandler(function(err) {
+        console.error("getAvailableYears failed:", err);
+        if (onSuccess) onSuccess({ years: [] });
+      })
+      .getAvailableYears("typing");
   },
 
   getYearsSummary: function(onSuccess) {
     google.script.run
       .withSuccessHandler(onSuccess || function(){})
-      .getYearsSummary_("typing");
+      .withFailureHandler(function(err) {
+        console.error("getYearsSummary failed:", err);
+        if (onSuccess) onSuccess({ summaries: [] });
+      })
+      .getYearsSummary("typing");
   },
 
   getDataByYear: function(year, batchSize, onSuccess) {
     google.script.run
       .withSuccessHandler(onSuccess || function(){})
-      .getDataByYear_("typing", year, batchSize);
+      .withFailureHandler(function(err) {
+        console.error("getDataByYear failed:", err);
+        if (onSuccess) onSuccess({ data: [], year: year, total: 0, success: false, error: err });
+      })
+      .getDataByYear("typing", year, batchSize);
   },
 
   loadRemainingDataByYear: function(year, startRow, batchSize, onSuccess) {
     google.script.run
       .withSuccessHandler(onSuccess || function(){})
-      .loadRemainingDataByYear_("typing", year, startRow, batchSize);
+      .withFailureHandler(function(err) {
+        console.error("loadRemainingDataByYear failed:", err);
+        if (onSuccess) onSuccess({ data: [], year: year, success: false, error: err });
+      })
+      .loadRemainingDataByYear("typing", year, startRow, batchSize);
   },
 
   searchExactName: function(term, onSuccess) {

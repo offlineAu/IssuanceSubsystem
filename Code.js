@@ -1,8 +1,9 @@
 // Global variables from Google Apps Script project properties
 // @ts-ignore - Declared in project settings
-var SPREADSHEET_ID, TYPING_SPREADSHEET_ID;
 
 const spreadsheetID = "1p865Qx9OSNj0E2yU_z4YYz3kJbnT50E_zH9Ll1euGPs";
+var SPREADSHEET_ID = spreadsheetID;
+var TYPING_SPREADSHEET_ID = spreadsheetID;
 const BIGQUERY_PROJECT_ID = "sodium-shard-459702-t9";
 const BIGQUERY_LOCATION = "US";
 const BIGQUERY_DATASET_ID = "executive_dataset";
@@ -290,9 +291,63 @@ const typingCreateFieldConfig = {
 const typingCreateFieldKeys = Object.keys(typingCreateFieldConfig);
 const developerFallbackEmail = "janoplo.airljoriz@gmail.com";
 
+function leftPad2_(value) {
+  value = String(value);
+  return value.length >= 2 ? value : "0" + value;
+}
+
 function formatDateForClient_(value) {
-  if (!(value instanceof Date)) return value || "";
-  return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  if (!value) return "";
+
+  // Already a Date object — most reliable path
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) return "";
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+
+  var raw = String(value).trim();
+  if (!raw) return "";
+
+  // Already in yyyy-MM-dd — return as-is
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  // ISO with time component — strip time, return date part
+  var isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})T/);
+  if (isoMatch) return isoMatch[1];
+
+  // dd/MM/yyyy or MM/dd/yyyy — extract parts, reconstruct as yyyy-MM-dd
+  var slashMatch = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (slashMatch) {
+    var p1 = leftPad2_(slashMatch[1]);
+    var p2 = leftPad2_(slashMatch[2]);
+    var yr = slashMatch[3];
+    // Philippine convention: dd/MM/yyyy
+    // If p1 > 12 it must be day, so format as yyyy-p2-p1
+    // Otherwise treat as dd/MM/yyyy → yyyy-p2-p1
+    var day = parseInt(p1, 10) > 12 ? p1 : p1;
+    var month = parseInt(p1, 10) > 12 ? p2 : p2;
+    // Day/month ambiguous but year is always correct — output yyyy-MM-dd
+    return yr + "-" + month + "-" + day;
+  }
+
+  // MM-dd-yyyy or dd-MM-yyyy — extract year, reconstruct
+  var dashMatch = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
+  if (dashMatch) {
+    var d1 = leftPad2_(dashMatch[1]);
+    var d2 = leftPad2_(dashMatch[2]);
+    var y = dashMatch[3];
+    return y + "-" + d1 + "-" + d2;
+  }
+
+  // Fallback: parse and reformat
+  try {
+    var parsed = new Date(raw);
+    if (!isNaN(parsed.getTime())) {
+      return Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    }
+  } catch (e) {}
+
+  return raw; // return as-is if nothing worked
 }
 
 function parseIsoDate_(value) {
@@ -6690,7 +6745,19 @@ function debugTurnaroundQueryDirect() {
  * Extract all unique years from the Date Received column
  * Returns sorted array of years (descending): ['2026', '2025', '2024', ...]
  */
-function getAvailableYears_(module) {
+function getYearDateColumnIndex_(headers) {
+  var target = "Date Received";
+  var exactIndex = headers.indexOf(target);
+  if (exactIndex !== -1) return exactIndex;
+
+  for (var i = 0; i < headers.length; i++) {
+    if (String(headers[i] || "").trim() === target) return i;
+  }
+
+  return -1;
+}
+
+function getAvailableYears(module) {
   var spreadsheetID = getSpreadsheetID_(module);
   var sheetName = getSheetName_(module);
   var ss = SpreadsheetApp.openById(spreadsheetID);
@@ -6707,19 +6774,7 @@ function getAvailableYears_(module) {
   
   // Find Date Received column index
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  var dateReceivedColName = (module === "issuance") ? "Verification: Date Received" : "Date Received";
-  var dateColumnIndex = headers.indexOf(dateReceivedColName);
-  
-  if (dateColumnIndex === -1) {
-    // Try alternative column names
-    for (var i = 0; i < headers.length; i++) {
-      var header = String(headers[i] || "").toLowerCase();
-      if (header.indexOf("date received") !== -1 || header.indexOf("received") !== -1) {
-        dateColumnIndex = i;
-        break;
-      }
-    }
-  }
+  var dateColumnIndex = getYearDateColumnIndex_(headers);
   
   if (dateColumnIndex === -1) {
     return { success: false, error: "Date Received column not found", years: [] };
@@ -6732,7 +6787,7 @@ function getAvailableYears_(module) {
   for (var i = 0; i < dateValues.length; i++) {
     var dateValue = dateValues[i][0];
     if (dateValue) {
-      var year = new Date(dateValue).getFullYear();
+      var year = getYearFromDate_(dateValue);
       if (!isNaN(year) && year > 2000 && year < 2100) {
         yearSet[year] = true; // Add to "set"
       }
@@ -6750,148 +6805,249 @@ function getAvailableYears_(module) {
 }
 
 /**
- * Get summary info for all years (year + count)
+ * Get Data by Year
  */
-function getYearsSummary_(module) {
+function getYearFromDate_(dateValue) {
+  if (!dateValue) return NaN;
+  try {
+    // Path 1: Sheets Date object — always reliable, use directly
+    if (dateValue instanceof Date) {
+      if (isNaN(dateValue.getTime())) return NaN;
+      return parseInt(
+        Utilities.formatDate(dateValue, Session.getScriptTimeZone(), "yyyy"), 10
+      );
+    }
+
+    var raw = String(dateValue).trim();
+    if (!raw) return NaN;
+
+    // Path 2: ISO yyyy-MM-dd or yyyy-MM-ddTHH:mm:ss.sssZ
+    var isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) {
+      return parseInt(isoMatch[1], 10);
+    }
+
+    // Path 3: dd/MM/yyyy or MM/dd/yyyy — year is always the last part
+    var slashMatch = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (slashMatch) {
+      return parseInt(slashMatch[3], 10);
+    }
+
+    // Path 4: MM-dd-yyyy or dd-MM-yyyy — year is always the last part
+    var dashDmyMatch = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
+    if (dashDmyMatch) {
+      return parseInt(dashDmyMatch[3], 10);
+    }
+
+    // Path 5: yyyy/MM/dd
+    var isoSlashMatch = raw.match(/^(\d{4})\/(\d{2})\/(\d{2})/);
+    if (isoSlashMatch) {
+      return parseInt(isoSlashMatch[1], 10);
+    }
+
+    // Path 6: Last resort — let JS parse and reformat via Utilities
+    var d = new Date(raw);
+    if (!isNaN(d.getTime())) {
+      return parseInt(
+        Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy"), 10
+      );
+    }
+
+    return NaN;
+  } catch (e) {
+    return NaN;
+  }
+}
+
+function getYearsSummary(module) {
   var spreadsheetID = getSpreadsheetID_(module);
   var sheetName = getSheetName_(module);
   var ss = SpreadsheetApp.openById(spreadsheetID);
   var sheet = ss.getSheetByName(sheetName);
-  
+
   if (!sheet || sheet.getLastRow() <= 1) {
     return { success: true, summaries: [] };
   }
-  
+
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  var dateReceivedColName = (module === "issuance") ? "Verification: Date Received" : "Date Received";
-  var dateColumnIndex = headers.indexOf(dateReceivedColName);
-  
-  // Fallback column detection
-  if (dateColumnIndex === -1) {
-    for (var i = 0; i < headers.length; i++) {
-      var header = String(headers[i] || "").toLowerCase();
-      if (header.indexOf("date received") !== -1 || header.indexOf("received") !== -1) {
-        dateColumnIndex = i;
-        break;
-      }
-    }
-  }
-  
+  var dateColumnIndex = getYearDateColumnIndex_(headers);
+
   if (dateColumnIndex === -1) {
     return { success: false, error: "Date Received column not found" };
   }
-  
+
   var lastRow = sheet.getLastRow();
   var dateValues = sheet.getRange(2, dateColumnIndex + 1, lastRow - 1, 1).getValues();
-  
+
   var yearCounts = {};
   for (var i = 0; i < dateValues.length; i++) {
     var dateValue = dateValues[i][0];
-    if (dateValue) {
-      var year = new Date(dateValue).getFullYear();
-      if (!isNaN(year) && year > 2000 && year < 2100) {
-        yearCounts[year] = (yearCounts[year] || 0) + 1;
-      }
+    if (!dateValue) continue;
+    var year = getYearFromDate_(dateValue);
+    if (!isNaN(year) && year > 2000 && year < 2100) {
+      yearCounts[year] = (yearCounts[year] || 0) + 1;
     }
   }
-  
+
   var summaries = Object.keys(yearCounts).map(function(year) {
-    return {
-      year: parseInt(year),
-      count: yearCounts[year],
-      loaded: false
-    };
+    return { year: parseInt(year), count: yearCounts[year], loaded: false };
   }).sort(function(a, b) { return b.year - a.year; });
-  
+
   return { success: true, summaries: summaries };
 }
 
-/**
- * Get data filtered by specific year
- */
-function getDataByYear_(module, year, batchSize, startRow) {
-  if (!batchSize) batchSize = 1000;
-  if (!startRow) startRow = 2;
-  
+function getDataByYear(module, year, batchSize, startRow) {
   var spreadsheetID = getSpreadsheetID_(module);
   var sheetName = getSheetName_(module);
-  var viewConfig = getCurrentRecordViewConfig_(module);
+  var viewConfig = getCurrentRecordViewConfig_();
+
   var ss = SpreadsheetApp.openById(spreadsheetID);
   var sheet = ss.getSheetByName(sheetName);
-  
-  if (!sheet) {
-    return { success: false, error: "Sheet not found", data: [], total: 0 };
-  }
-  
-  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  var dateReceivedColName = (module === "issuance") ? "Verification: Date Received" : "Date Received";
-  var dateColumnIndex = headers.indexOf(dateReceivedColName);
-  
-  // Fallback column detection
-  if (dateColumnIndex === -1) {
-    for (var i = 0; i < headers.length; i++) {
-      var header = String(headers[i] || "").toLowerCase();
-      if (header.indexOf("date received") !== -1 || header.indexOf("received") !== -1) {
-        dateColumnIndex = i;
-        break;
-      }
-    }
-  }
-  
-  if (dateColumnIndex === -1) {
+  if (!sheet) return { success: false, error: "Sheet not found" };
+
+  var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
+  if (lastRow <= 1) return { success: true, data: [], total: 0 };
+
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var targetYear = parseInt(year);
+  var dateColIdx = getYearDateColumnIndex_(headers);
+  if (dateColIdx === -1) {
     return { success: false, error: "Date Received column not found", data: [], total: 0 };
   }
-  
-  var targetYear = parseInt(year);
-  var lastRow = sheet.getLastRow();
-  var allRows = sheet.getRange(startRow, 1, Math.min(batchSize, lastRow - startRow + 1), sheet.getLastColumn()).getValues();
-  
+  var maxResults = batchSize || 5000;
+  var scanFrom = (startRow && startRow > 1) ? startRow : lastRow;
+
+  var colsToMap = (viewConfig.dataColumns && viewConfig.dataColumns.length > 0)
+    ? viewConfig.dataColumns : headers;
+
+  // Pre-compute column indices once
+  var colIndexMap = {};
+  colsToMap.forEach(function(colName) {
+    colIndexMap[colName] = headers.indexOf(colName);
+  });
+
+  // Compute narrow column range to fetch
+  var neededColNums = Object.keys(colIndexMap)
+    .map(function(name) { return colIndexMap[name]; })
+    .filter(function(idx) { return idx >= 0; })
+    .map(function(idx) { return idx + 1; })
+    .sort(function(a, b) { return a - b; });
+
+  var minCol = neededColNums[0];
+  var maxCol = neededColNums[neededColNums.length - 1];
+  var rangeWidth = maxCol - minCol + 1;
+
+  // Check if the Date Received column falls within our narrow range.
+  var dateColOneBased = dateColIdx + 1;
+  var dateInRange = (dateColOneBased >= minCol && dateColOneBased <= maxCol);
+  var dateRangeOffset = dateInRange ? (dateColOneBased - minCol) : -1;
+
   var yearRows = [];
-  var nextStartRow = startRow;
-  
-  for (var i = 0; i < allRows.length; i++) {
-    var dateValue = allRows[i][dateColumnIndex];
-    if (dateValue) {
-      var rowYear = new Date(dateValue).getFullYear();
+  var chunkSize = 2000;
+  var currentBottom = scanFrom;
+  var stoppedEarly = false;
+  var nextScanFrom = 0;
+
+  while (currentBottom >= 2) {
+    var chunkStart = Math.max(2, currentBottom - chunkSize + 1);
+    var chunkLength = currentBottom - chunkStart + 1;
+
+    // Read only the date column for this chunk
+    var dateScan = sheet.getRange(chunkStart, dateColIdx + 1, chunkLength, 1).getValues();
+
+    var matchingOffsets = [];
+    for (var i = 0; i < dateScan.length; i++) {
+      var val = dateScan[i][0];
+      if (!val) continue;
+      var rowYear = getYearFromDate_(val);
+      if (isNaN(rowYear)) continue;
       if (rowYear === targetYear) {
-        var rowData = {};
-        for (var j = 0; j < headers.length; j++) {
-          rowData[headers[j]] = allRows[i][j];
-        }
-        rowData._row = startRow + i;
-        rowData._year = targetYear;
-        yearRows.push(rowData);
+        matchingOffsets.push(i);
       }
     }
-    nextStartRow = startRow + i + 1;
-  }
-  
-  // Count total for this year
-  var allDateValues = sheet.getRange(2, dateColumnIndex + 1, lastRow - 1, 1).getValues();
-  var yearTotal = 0;
-  for (var i = 0; i < allDateValues.length; i++) {
-    var dateValue = allDateValues[i][0];
-    if (dateValue && new Date(dateValue).getFullYear() === targetYear) {
-      yearTotal++;
+
+    if (matchingOffsets.length > 0) {
+      var sheetRowNumbers = matchingOffsets.map(function(offset) {
+        return chunkStart + offset;
+      }).sort(function(a, b) { return b - a; });
+
+      var j = 0;
+      while (j < sheetRowNumbers.length) {
+        var runStart = sheetRowNumbers[j];
+        var runEnd = runStart;
+        while (
+          j + 1 < sheetRowNumbers.length &&
+          sheetRowNumbers[j + 1] === sheetRowNumbers[j] - 1
+        ) {
+          j++;
+          runEnd = sheetRowNumbers[j];
+        }
+        var rangeStart = Math.min(runStart, runEnd);
+        var rangeEnd = Math.max(runStart, runEnd);
+        var runLen = rangeEnd - rangeStart + 1;
+
+        // Fetch only the narrow column range
+        var runValues = sheet.getRange(rangeStart, minCol, runLen, rangeWidth).getValues();
+
+        for (var r = runValues.length - 1; r >= 0; r--) {
+          var rowNumber = rangeStart + r;
+          if (yearRows.length >= maxResults) {
+            nextScanFrom = rowNumber;
+            stoppedEarly = true;
+            break;
+          }
+
+          // Verify year from fetched data — guards against boundary leakage
+          if (dateInRange) {
+            var cellDate = runValues[r][dateRangeOffset];
+            var verifiedYear = getYearFromDate_(cellDate);
+            if (verifiedYear !== targetYear) continue;
+          }
+
+          var rowData = {};
+          colsToMap.forEach(function(colName) {
+            var absIdx = colIndexMap[colName];
+            if (absIdx < 0) { rowData[colName] = ""; return; }
+            var rangeOffset = (absIdx + 1) - minCol;
+            rowData[colName] = formatDateForClient_(runValues[r][rangeOffset]);
+          });
+          rowData._row = rowNumber;
+          yearRows.push(rowData);
+        }
+
+        if (stoppedEarly) break;
+        j++;
+      }
     }
+
+    if (stoppedEarly) break;
+    currentBottom = chunkStart - 1;
   }
-  
+
+  var hasMore = stoppedEarly && nextScanFrom > 2;
+
   return {
     success: true,
     data: yearRows,
-    total: yearTotal,
-    year: year,
-    nextStartRow: nextStartRow,
-    hasMore: nextStartRow <= lastRow,
-    viewConfig: viewConfig
+    year: year.toString(),
+    total: yearRows.length,
+    hasMore: hasMore,
+    nextScanFrom: hasMore ? nextScanFrom : 0,
+    viewConfig: viewConfig,
+    debug: {
+      yearDateColumn: headers[dateColIdx],
+      yearDateColumnIndex: dateColIdx + 1,
+      scanFrom: scanFrom
+    }
   };
 }
 
 /**
  * Load remaining data for a specific year (pagination within year)
  */
-function loadRemainingDataByYear_(module, year, startRow, batchSize) {
-  return getDataByYear_(module, year, batchSize, startRow);
+function loadRemainingDataByYear(module, year, startRow, batchSize) {
+  return getDataByYear(module, year, batchSize, startRow);
 }
 
 /* Helper functions for module-specific configuration */
@@ -6908,21 +7064,26 @@ function getSpreadsheetID_(module) {
 function getSheetName_(module) {
   // Return appropriate sheet name based on module
   if (module === "issuance") {
-    return "Verification Logsheet"; // or appropriate sheet name
+    return databaseSheetName; // or appropriate sheet name
   } else if (module === "typing") {
-    return "Typing Records"; // or appropriate sheet name
+    return databaseSheetName; // or appropriate sheet name
   }
-  return "Sheet1";
+  return databaseSheetName;
 }
 
-function getCurrentRecordViewConfig_(module) {
-  // Return appropriate view config
-  return {
-    mode: "standard",
-    supportsBatchAdd: true,
-    supportsExport: true,
-    dataColumns: [],
-    tableColumns: [],
-    modalFields: []
-  };
+function debugDateColumn() {
+  var ss = SpreadsheetApp.openById(spreadsheetID);
+  var sheet = ss.getSheetByName(databaseSheetName);
+  var headers = sheet.getRange(1, 1, 1, 5).getValues()[0];
+  var lastRow = sheet.getLastRow();
+  
+  // Check first 5 and last 5 rows of column B
+  var topDates = sheet.getRange(2, 2, 5, 1).getValues();
+  var bottomDates = sheet.getRange(lastRow - 4, 2, 5, 1).getValues();
+  
+  Logger.log("Headers 1-5: " + JSON.stringify(headers));
+  Logger.log("Column B header: " + headers[1]); // index 1 = column B
+  Logger.log("Top 5 Column B values: " + JSON.stringify(topDates));
+  Logger.log("Bottom 5 Column B values: " + JSON.stringify(bottomDates));
+  Logger.log("Last row: " + lastRow);
 }

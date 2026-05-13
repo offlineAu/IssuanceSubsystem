@@ -1468,6 +1468,36 @@ body {
   max-height: none !important;
 }
 
+.save-queue-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.save-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.save-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.save-queue-pending  { background: #fefce8; }
+.save-queue-saving   { background: #eff6ff; }
+.save-queue-saved    { background: #f0fdf4; }
+.save-queue-failed   { background: #fef2f2; }
+.save-queue-name     { flex: 1; font-weight: 600; }
+.save-queue-status   { color: #6b7280; }
+.save-queue-icon     { font-size: 14px; }
+
 /* ============================================
    TYPING RECORDS LEDGER (Issuance Style)
    ============================================ */

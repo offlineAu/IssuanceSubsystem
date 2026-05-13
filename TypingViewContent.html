@@ -152,12 +152,14 @@
 
 <!-- ADD RECORD MODAL -->
 <div id="addRecordModal" class="modal">
-  <div class="modal-content" style="max-width:700px; height:auto; flex-direction:column;">
+  <div class="modal-content" style="max-width:740px; height:auto; max-height:92vh; flex-direction:column; overflow-y:auto;">
+    
     <div class="d-flex justify-content-between align-items-center mb-4">
       <h4 class="fw-bold mb-0">Add Record</h4>
       <button type="button" class="btn-close" onclick="closeAddRecordModal()"></button>
     </div>
 
+    <!-- Form Fields -->
     <div class="row g-3">
       <div class="col-md-6">
         <label class="form-label fw-semibold">Date Received <span class="text-danger">*</span></label>
@@ -170,14 +172,14 @@
       </div>
       <div class="col-12">
         <label class="form-label fw-semibold">Name of the Student <span class="text-danger">*</span></label>
-        <input id="temp_student_name" type="text" class="form-control" placeholder="ALL CAPS">
+        <input id="temp_student_name" type="text" class="form-control" placeholder="AUTO ALL CAPS">
         <div id="error_temp_student_name" class="field-error-msg"></div>
       </div>
       <div class="col-md-6">
         <label class="form-label fw-semibold">Transaction Type</label>
         <select id="temp_transaction_type" class="form-select">
           <option value="">-- Select --</option>
-          <option value="Walk-In">Walk-In</option>
+          <option value="Walk-In" selected>Walk-In</option>
           <option value="Online">Online</option>
         </select>
       </div>
@@ -208,34 +210,49 @@
       </div>
     </div>
 
-    <div id="addRecordActionError" class="action-error-msg mt-3"></div>
+    <div id="addRecordActionError" class="action-error-msg mt-2"></div>
 
+    <!-- Add to Batch Button -->
     <div class="d-flex justify-content-end gap-2 mt-4">
-      <button type="button" class="btn btn-secondary" onclick="closeAddRecordModal()">Cancel</button>
+      <button type="button" class="btn btn-outline-danger" onclick="TypingController.cancelSaveQueue()">Cancel Queue</button>
+      <button type="button" class="btn btn-secondary" onclick="closeAddRecordModal()">Close</button>
       <button type="button" class="btn btn-primary" onclick="TypingController.addManualBatchStudent()">
-        <i class="bi bi-plus-circle me-1"></i> Add to Batch
+        <i class="bi bi-plus-circle me-1"></i> Add to Queue
       </button>
     </div>
 
-    <!-- Batch list inside add modal -->
-    <div class="mt-4 border-top pt-3" id="addModalBatchSection" style="display:none;">
+    <!-- Save Queue Panel — shows per-student save status -->
+    <div id="saveQueuePanel" class="mt-3 border rounded p-3" style="display:none;">
+      <!-- Rendered by View.renderSaveQueue() -->
+    </div>
+
+    <!-- Staged Records List -->
+    <div class="mt-3 border-top pt-3" id="addModalBatchSection" style="display:none;">
       <div class="d-flex justify-content-between align-items-center mb-2">
-        <h6 class="fw-bold mb-0">Batch Queue</h6>
+        <div>
+          <h6 class="fw-bold mb-0">Staged Records</h6>
+          <div class="text-muted" style="font-size:11px;">Records below are being saved automatically in the background.</div>
+        </div>
         <span class="badge bg-primary" id="addModalBatchCount">0</span>
       </div>
-      <div id="addModalBatchList" style="max-height:180px; overflow-y:auto;"></div>
-      <div class="d-flex justify-content-end mt-3">
-        <button type="button" class="btn btn-success" onclick="TypingController.saveBatch()">
-          <i class="bi bi-save me-1"></i> Save All
+      <div id="addModalBatchList" style="max-height:200px; overflow-y:auto;"></div>
+      <div class="d-flex justify-content-end gap-2 mt-3">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="TypingController.retryFailedQueueItems()">
+          <i class="bi bi-arrow-clockwise me-1"></i> Retry Failed
+        </button>
+        <button type="button" class="btn btn-sm btn-success" onclick="TypingController.flushSaveQueue()">
+          <i class="bi bi-send me-1"></i> Save Now
         </button>
       </div>
     </div>
+
   </div>
 </div>
 
 <!-- EDIT MODAL (for existing rows) -->
 <div id="editModal" class="modal">
   <div class="modal-content" style="max-width:900px; height:auto; max-height:90vh; flex-direction:column; overflow-y:auto;">
+    
     <div class="d-flex justify-content-between align-items-center mb-3">
       <div>
         <h4 class="fw-bold mb-1" id="editModalStudentName">Student Record</h4>
@@ -244,26 +261,46 @@
       <button type="button" class="btn-close" onclick="closeEditModal()"></button>
     </div>
 
-    <!-- Info strip (read-only from add record fields) -->
+    <!-- Info strip (read-only) -->
     <div class="row g-2 mb-3 p-3 bg-light rounded" id="editModalInfoStrip">
-      <div class="col-md-3"><span class="small text-muted d-block">Date Received</span><strong id="view_date_received">-</strong></div>
-      <div class="col-md-3"><span class="small text-muted d-block">Target Release</span><strong id="view_target_release">-</strong></div>
-      <div class="col-md-6"><span class="small text-muted d-block">HEI</span><strong id="view_hei">-</strong></div>
-      <div class="col-md-6"><span class="small text-muted d-block">Program</span><strong id="view_program">-</strong></div>
-      <div class="col-md-3"><span class="small text-muted d-block">Transaction</span><strong id="view_transaction">-</strong></div>
-      <div class="col-md-3"><span class="small text-muted d-block">ES II In-charge</span><strong id="view_es2">-</strong></div>
+      <div class="col-md-3">
+        <span class="small text-muted d-block">Date Received</span>
+        <strong id="view_date_received">-</strong>
+      </div>
+      <div class="col-md-3">
+        <span class="small text-muted d-block">Target Release</span>
+        <strong id="view_target_release">-</strong>
+      </div>
+      <div class="col-md-6">
+        <span class="small text-muted d-block">HEI</span>
+        <strong id="view_hei">-</strong>
+      </div>
+      <div class="col-md-4">
+        <span class="small text-muted d-block">Program</span>
+        <strong id="view_program">-</strong>
+      </div>
+      <div class="col-md-4">
+        <span class="small text-muted d-block">Transaction</span>
+        <strong id="view_transaction">-</strong>
+      </div>
+      <div class="col-md-4">
+        <span class="small text-muted d-block">ES II In-charge</span>
+        <strong id="view_es2">-</strong>
+      </div>
     </div>
 
     <!-- Tabs -->
     <ul class="nav nav-tabs mb-3" id="editModalTabs">
       <li class="nav-item">
-        <button class="nav-link active" type="button" onclick="TypingController.switchEditTab('general', this)">
-          General Info
+        <button class="nav-link active" type="button" 
+                onclick="TypingController.switchEditTab('general', this)">
+          <i class="bi bi-file-text me-1"></i> General Info
         </button>
       </li>
       <li class="nav-item">
-        <button class="nav-link" type="button" onclick="TypingController.switchEditTab('verification', this)">
-          Verification
+        <button class="nav-link" type="button" 
+                onclick="TypingController.switchEditTab('verification', this)">
+          <i class="bi bi-shield-check me-1"></i> Verification
         </button>
       </li>
     </ul>
@@ -284,8 +321,10 @@
           <input id="edit_status_of_application" type="text" class="form-control">
         </div>
 
-        <div class="col-12 mt-2">
-          <p class="fw-semibold text-muted small mb-2">Course/Evaluation</p>
+        <div class="col-12">
+          <p class="fw-semibold text-muted small mb-1 mt-1 border-top pt-2">
+            Course / Evaluation
+          </p>
         </div>
         <div class="col-md-4">
           <label class="form-label fw-semibold">Date Received</label>
@@ -299,15 +338,15 @@
           <label class="form-label fw-semibold">Date Forwarded</label>
           <input id="edit_eval_date_forwarded" type="date" class="form-control">
         </div>
-        <div class="col-md-6">
+        <div class="col-md-4">
           <label class="form-label fw-semibold">Evaluation Status</label>
           <input id="edit_evaluation_status" type="text" class="form-control">
         </div>
-        <div class="col-md-6">
+        <div class="col-md-4">
           <label class="form-label fw-semibold">Application Remarks</label>
           <input id="edit_application_remarks" type="text" class="form-control">
         </div>
-        <div class="col-md-6">
+        <div class="col-md-4">
           <label class="form-label fw-semibold">Assigned Person</label>
           <input id="edit_assigned_person" type="text" class="form-control">
         </div>
@@ -317,23 +356,45 @@
     <!-- Verification Tab -->
     <div id="editTab_verification" class="edit-tab-panel d-none">
 
-      <!-- View section -->
+      <!-- Read-only mirror of General Info eval fields -->
       <div class="p-3 bg-light rounded mb-3">
-        <p class="fw-semibold small text-muted mb-2">Course/Evaluation (Read Only)</p>
+        <p class="fw-semibold small text-muted mb-2">
+          <i class="bi bi-eye me-1"></i> Course/Evaluation (Read Only)
+        </p>
         <div class="row g-2">
-          <div class="col-md-4"><span class="small text-muted d-block">Date Received</span><strong id="vview_eval_date_received">-</strong></div>
-          <div class="col-md-4"><span class="small text-muted d-block">Date Accomplished</span><strong id="vview_eval_date_accomplished">-</strong></div>
-          <div class="col-md-4"><span class="small text-muted d-block">Date Forwarded</span><strong id="vview_eval_date_forwarded">-</strong></div>
-          <div class="col-md-4"><span class="small text-muted d-block">Evaluation Status</span><strong id="vview_evaluation_status">-</strong></div>
-          <div class="col-md-4"><span class="small text-muted d-block">Application Remarks</span><strong id="vview_application_remarks">-</strong></div>
-          <div class="col-md-4"><span class="small text-muted d-block">Assigned Person</span><strong id="vview_assigned_person">-</strong></div>
+          <div class="col-md-4">
+            <span class="small text-muted d-block">Date Received</span>
+            <strong id="vview_eval_date_received">-</strong>
+          </div>
+          <div class="col-md-4">
+            <span class="small text-muted d-block">Date Accomplished</span>
+            <strong id="vview_eval_date_accomplished">-</strong>
+          </div>
+          <div class="col-md-4">
+            <span class="small text-muted d-block">Date Forwarded</span>
+            <strong id="vview_eval_date_forwarded">-</strong>
+          </div>
+          <div class="col-md-4">
+            <span class="small text-muted d-block">Evaluation Status</span>
+            <strong id="vview_evaluation_status">-</strong>
+          </div>
+          <div class="col-md-4">
+            <span class="small text-muted d-block">Application Remarks</span>
+            <strong id="vview_application_remarks">-</strong>
+          </div>
+          <div class="col-md-4">
+            <span class="small text-muted d-block">Assigned Person</span>
+            <strong id="vview_assigned_person">-</strong>
+          </div>
         </div>
       </div>
 
-      <!-- Editable verification fields -->
+      <!-- Editable Verification Fields -->
       <div class="row g-3">
         <div class="col-12">
-          <p class="fw-semibold small text-muted mb-2">Verification</p>
+          <p class="fw-semibold small text-muted mb-1">
+            <i class="bi bi-pencil-square me-1"></i> Verification
+          </p>
         </div>
         <div class="col-md-4">
           <label class="form-label fw-semibold">Date Received</label>
@@ -362,13 +423,22 @@
       </div>
     </div>
 
-    <div id="editModalActionError" class="action-error-msg mt-3"></div>
+    <!-- Edit modal save status -->
+    <div id="editSaveQueuePanel" class="mt-3" style="display:none;">
+      <div class="d-flex align-items-center gap-2 p-2 rounded border bg-light">
+        <span id="editSaveStatus" class="small fw-semibold text-muted"></span>
+      </div>
+    </div>
+
+    <div id="editModalActionError" class="action-error-msg mt-2"></div>
 
     <div class="d-flex justify-content-end gap-2 mt-4 pt-3 border-top">
       <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
-      <button type="button" class="btn btn-primary" onclick="TypingController.saveExistingRecord()">
+      <button type="button" id="editSaveBtn" class="btn btn-primary" 
+              onclick="TypingController.saveExistingRecord()">
         <i class="bi bi-save me-1"></i> Save Changes
       </button>
     </div>
+
   </div>
 </div>

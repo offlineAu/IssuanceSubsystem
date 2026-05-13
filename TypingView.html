@@ -564,6 +564,48 @@ var TypingView = {
     this.setValue("temp_program", entry.fields.program);
   },
 
+  renderSaveQueue: function() {
+    var container = this.getEl("saveQueuePanel");
+    if (!container) return;
+
+    var queue = Model.saveQueue;
+    if (!queue.length) {
+      container.innerHTML = "";
+      container.style.display = "none";
+      return;
+    }
+
+    container.style.display = "";
+    var statusIcon = { pending: "⏳", saving: "🔄", saved: "✅", failed: "❌" };
+    var statusLabel = { pending: "Pending", saving: "Saving...", saved: "Saved", failed: "Failed" };
+
+    var pendingCount = queue.filter(function(q) { return q.status === "pending"; }).length;
+    var savingCount  = queue.filter(function(q) { return q.status === "saving"; }).length;
+    var savedCount   = queue.filter(function(q) { return q.status === "saved"; }).length;
+    var failedCount  = queue.filter(function(q) { return q.status === "failed"; }).length;
+
+    container.innerHTML =
+      "<div class='save-queue-header'>" +
+        "<span class='fw-bold small'>Save Queue</span>" +
+        "<span class='save-queue-counts small text-muted'>" +
+          (savingCount ? "<span class='text-primary'>🔄 " + savingCount + " saving</span> " : "") +
+          (pendingCount ? "<span class='text-warning'>⏳ " + pendingCount + " pending</span> " : "") +
+          (savedCount ? "<span class='text-success'>✅ " + savedCount + " saved</span> " : "") +
+          (failedCount ? "<span class='text-danger'>❌ " + failedCount + " failed</span>" : "") +
+        "</span>" +
+        (failedCount ? "<button type='button' class='btn btn-sm btn-outline-danger ms-2' onclick='TypingController.retryFailedQueueItems()'>Retry Failed</button>" : "") +
+      "</div>" +
+      "<div class='save-queue-list'>" +
+      queue.map(function(q) {
+        return "<div class='save-queue-item save-queue-" + q.status + "'>" +
+          "<span class='save-queue-icon'>" + (statusIcon[q.status] || "?") + "</span>" +
+          "<span class='save-queue-name'>" + View.escapeHtml(q.entry.fields.studentName || "-") + "</span>" +
+          "<span class='save-queue-status small'>" + (statusLabel[q.status] || q.status) + (q.error ? ": " + View.escapeHtml(q.error) : "") + "</span>" +
+        "</div>";
+      }).join("") +
+      "</div>";
+  },
+
   closeEditModal: function() {
     var modal = this.getEl("editModal");
     if (modal) modal.classList.remove("show");

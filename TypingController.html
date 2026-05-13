@@ -470,15 +470,16 @@ var TypingController = {
   openManualBatchModal: function() {
     Model.clearEditing();
     View.clearModalValidationErrors();
-    // Reset all add record fields
     ["temp_date_received","temp_target_release_date","temp_student_name",
-    "temp_transaction_type","temp_hei","temp_hei_address",
-    "temp_date_graduation","temp_program","temp_es2_incharge"].forEach(function(id) {
+    "temp_hei","temp_hei_address","temp_date_graduation",
+    "temp_program","temp_es2_incharge"].forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.value = "";
     });
-    View.renderSelectedBatchList();
-    View.updateActionButtons();
+    // Default transaction type
+    var txType = document.getElementById("temp_transaction_type");
+    if (txType) txType.value = "Walk-in";
+
     this.renderAddModalBatchList();
     var modal = document.getElementById("addRecordModal");
     if (modal) modal.classList.add("show");
@@ -670,37 +671,56 @@ var TypingController = {
 
   addManualBatchStudent: function() {
     View.clearModalValidationErrors();
-    var patch = this.getFormPatch();
 
-    if (!patch.dateReceived) {
+    var getVal = function(id) {
+      var el = document.getElementById(id);
+      return el ? el.value.trim() : "";
+    };
+
+    var dateReceived   = getVal("temp_date_received");
+    var studentName    = getVal("temp_student_name");
+    var hei            = getVal("temp_hei");
+    var dateGraduation = getVal("temp_date_graduation");
+    var program        = getVal("temp_program");
+
+    if (!dateReceived) {
       View.setModalFieldError("temp_date_received", "Date Received is required.");
       return;
     }
-    if (!String(patch.studentName).trim()) {
+    if (!studentName) {
       View.setModalFieldError("temp_student_name", "Name of the Student is required.");
       return;
     }
-    if (!String(patch.hei).trim()) {
+    if (!hei) {
       View.setModalFieldError("temp_hei", "HEI is required.");
       return;
     }
-    if (!String(patch.dateGraduation).trim()) {
+    if (!dateGraduation) {
       View.setModalFieldError("temp_date_graduation", "Date of Graduation is required.");
       return;
     }
-    if (!String(patch.program).trim()) {
+    if (!program) {
       View.setModalFieldError("temp_program", "Program is required.");
       return;
     }
 
-    var entry = Model.createManualBatchEntry(patch);
-    this.refreshDerivedFields(entry);
+    var entry = Model.createManualBatchEntry({
+      dateReceived:      dateReceived,
+      studentName:       studentName.toUpperCase(),
+      hei:               hei,
+      heiAddress:        getVal("temp_hei_address"),
+      dateGraduation:    dateGraduation,
+      program:           program,
+      es2InCharge:       getVal("temp_es2_incharge"),
+      targetReleaseDate: getVal("temp_target_release_date"),
+      transactionType:   getVal("temp_transaction_type") || "Walk-in"
+    });
+
     Model.addBatchStudent(entry);
-    View.renderSelectedBatchList();
-    View.updateActionButtons();
-    
-    // Reset name only for next entry
+    this.enqueueSave(entry);       // auto background save
+    this.renderAddModalBatchList();
     View.setValue("temp_student_name", "");
+    document.getElementById("temp_student_name").focus();
   },
 
   selectBatchStudent: function(rowID) {
@@ -724,6 +744,165 @@ var TypingController = {
     View.populateEditForm(Model.batchStudents[0]);
     View.renderSelectedBatchList();
     View.updateActionButtons();
+  },
+
+  // Throttled save — waits 1.5s after last addition before firing
+  enqueueSave: function(entry) {
+    Model.addToSaveQueue(entry);
+    View.renderSaveQueue();
+
+    if (Model.saveThrottleTimer) clearTimeout(Model.saveThrottleTimer);
+    Model.saveThrottleTimer = setTimeout(function() {
+      TypingController.flushSaveQueue();
+    }, 1500);
+  },
+
+  cancelSaveQueue: function() {
+    // Stop any pending throttle timer
+    if (Model.saveThrottleTimer) {
+      clearTimeout(Model.saveThrottleTimer);
+      Model.saveThrottleTimer = null;
+    }
+    // Mark any pending/saving items as cancelled so they don't retry
+    Model.saveQueue.forEach(function(q) {
+      if (q.status === "pending" || q.status === "saving") {
+        q.status = "failed";
+        q.error = "Cancelled by user";
+      }
+    });
+    View.renderSaveQueue();
+    View.showSaveIndicator("Queue cancelled. Already-saved records are kept.", "error", 4000);
+  },
+
+  flushSaveQueue: function() {
+    var pending = Model.saveQueue.filter(function(q) {
+      return q.status === "pending" || (q.status === "failed" && q.attempts < 3);
+    });
+    if (!pending.length) return;
+
+    pending.forEach(function(q) {
+      q.status = "saving";
+      q.attempts++;
+    });
+    View.renderSaveQueue();
+
+    var payloads = pending.map(function(q) {
+      return {
+        dateReceived:      q.entry.fields.dateReceived      || "",
+        studentName:       q.entry.fields.studentName       || "",
+        hei:               q.entry.fields.hei               || "",
+        heiAddress:        q.entry.fields.heiAddress        || "",
+        dateGraduation:    q.entry.fields.dateGraduation    || "",
+        program:           q.entry.fields.program           || "",
+        es2InCharge:       q.entry.fields.es2InCharge       || "",
+        targetReleaseDate: q.entry.fields.targetReleaseDate || "",
+        transactionType:   q.entry.fields.transactionType   || "Walk-In"
+      };
+    });
+
+    var batchId = "batch-" + Date.now();
+
+    Service.updateTempRecordEntries(payloads, batchId, function(result) {
+      // Unwrap route wrapper: { handled, status, data: { results: [...] } }
+      var unwrapped = (result && result.data && typeof result.data === "object") ? result.data : result;
+
+      // Guard: server returned null or non-object
+      if (!unwrapped || typeof unwrapped !== "object") {
+        pending.forEach(function(q) {
+          Model.updateQueueStatus(q.entry._row, "failed", "Server returned no response");
+        });
+        View.renderSaveQueue();
+        View.showSaveIndicator("Server error — will retry automatically.", "error", 3000);
+        if (Model.saveThrottleTimer) clearTimeout(Model.saveThrottleTimer);
+        Model.saveThrottleTimer = setTimeout(function() {
+          TypingController.retryFailedQueueItems();
+        }, 4000);
+        return;
+      }
+
+      var results = Array.isArray(unwrapped.results) ? unwrapped.results : [];
+
+      // Guard: results array length mismatch — partial failure, log what we can
+      if (results.length !== pending.length) {
+        console.warn("[flushSaveQueue] Results length mismatch: expected " +
+          pending.length + " got " + results.length);
+      }
+
+      var hasAnyFailure = false;
+      pending.forEach(function(q, i) {
+        var res = results[i];
+        if (res && res.ok) {
+          Model.updateQueueStatus(q.entry._row, "saved");
+        } else {
+          hasAnyFailure = true;
+          var errMsg = (res && res.message) ? res.message : "No result returned for this entry";
+          Model.updateQueueStatus(q.entry._row, "failed", errMsg);
+        }
+      });
+
+      View.renderSaveQueue();
+
+      // Check overall queue completion
+      var allDone = Model.saveQueue.every(function(q) {
+        return q.status === "saved" || (q.status === "failed" && q.attempts >= 3);
+      });
+
+      if (!allDone) {
+        // Some still have retries left — schedule
+        if (Model.saveThrottleTimer) clearTimeout(Model.saveThrottleTimer);
+        Model.saveThrottleTimer = setTimeout(function() {
+          TypingController.retryFailedQueueItems();
+        }, 3000);
+        return;
+      }
+
+      var anyStillFailed = Model.saveQueue.some(function(q) { return q.status === "failed"; });
+      if (!anyStillFailed) {
+        View.showSaveIndicator("All " + Model.saveQueue.length + " records saved.", "success", 4000);
+        setTimeout(function() {
+          Model.clearSavedFromQueue();
+          View.renderSaveQueue();
+          var modal = document.getElementById("addRecordModal");
+          if (modal) modal.classList.remove("show");
+          Model.batchStudents = [];
+          Model.saveQueue = [];
+          TypingController.initData({ silent: true });
+        }, 1800);
+      } else {
+        var failedNames = Model.saveQueue
+          .filter(function(q) { return q.status === "failed"; })
+          .map(function(q) { return q.entry.fields.studentName || "Unknown"; });
+        View.showSaveIndicator(
+          failedNames.length + " record(s) failed after 3 attempts: " + failedNames.join(", "),
+          "error", 0
+        );
+      }
+
+    }, function(err) {
+      // Network/RPC failure
+      pending.forEach(function(q) {
+        Model.updateQueueStatus(q.entry._row, "failed",
+          (err && err.message) ? err.message : "Network error");
+      });
+      View.renderSaveQueue();
+      View.showSaveIndicator("Connection failed. Retrying in 5s...", "error", 4000);
+      if (Model.saveThrottleTimer) clearTimeout(Model.saveThrottleTimer);
+      Model.saveThrottleTimer = setTimeout(function() {
+        TypingController.retryFailedQueueItems();
+      }, 5000);
+    });
+  },
+
+  retryFailedQueueItems: function() {
+    Model.saveQueue.forEach(function(q) {
+      if (q.status === "failed") {
+        q.status = "pending";
+        q.attempts = 0;  // ← reset so the 3-attempt limit starts fresh
+        q.error = "";
+      }
+    });
+    View.renderSaveQueue();
+    this.flushSaveQueue();
   },
 
   saveEdit: function() {
@@ -916,20 +1095,55 @@ var TypingController = {
       }
     });
 
+    // Auto-caps student name
+    var studentNameInput = document.getElementById("temp_student_name");
+    if (studentNameInput) {
+      studentNameInput.addEventListener("input", function() {
+        var pos = this.selectionStart;
+        this.value = this.value.toUpperCase();
+        this.setSelectionRange(pos, pos);
+      });
+    }
+
+    // HEI auto-fill address + default transaction type
     var heiInput = document.getElementById("temp_hei");
     if (heiInput) {
       heiInput.addEventListener("change", function() {
-        TypingController.syncCurrentFormToModel("hei");
+        var hei = heiInput.value.trim();
+        var address = (Model.refData.heiMap || {})[hei] || "";
+        View.setValue("temp_hei_address", address);
+
+        // Default transaction type to Walk-in if not already set
+        var txType = document.getElementById("temp_transaction_type");
+        if (txType && !txType.value) txType.value = "Walk-in";
+      });
+      heiInput.addEventListener("input", function() {
+        var hei = heiInput.value.trim();
+        var address = (Model.refData.heiMap || {})[hei] || "";
+        if (address) View.setValue("temp_hei_address", address);
+
+        if (!document.getElementById("temp_transaction_type").value) {
+          document.getElementById("temp_transaction_type").value = "Walk-in";
+        }
       });
     }
 
+    // Program auto-fill ES II In-charge
     var programInput = document.getElementById("temp_program");
     if (programInput) {
       programInput.addEventListener("change", function() {
-        TypingController.syncCurrentFormToModel("program");
+        var program = programInput.value.trim();
+        var es2 = (Model.refData.programMap || {})[program] || "";
+        View.setValue("temp_es2_incharge", es2);
+      });
+      programInput.addEventListener("input", function() {
+        var program = programInput.value.trim();
+        var es2 = (Model.refData.programMap || {})[program] || "";
+        if (es2) View.setValue("temp_es2_incharge", es2);
       });
     }
 
+    // Date received auto-computes target release
     var dateReceivedInput = document.getElementById("temp_date_received");
     if (dateReceivedInput) {
       dateReceivedInput.addEventListener("change", function() {
@@ -938,7 +1152,6 @@ var TypingController = {
           var target = document.getElementById("temp_target_release_date");
           if (target) target.value = TypingController.addDaysToIso(val, 7);
         }
-        TypingController.syncCurrentFormToModel("dateReceived");
       });
     }
 

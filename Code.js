@@ -1560,23 +1560,39 @@ function include(filename) {
   }
 }
 
-function doGet() {
-  const email = getEditorEmail_();
-  const userContext = resolveUserContext_(email);
-  const position = userContext ? String(userContext.position || "").trim().toLowerCase() : "";
-  
-  let templateName = "IssuanceIndex"; // Default for Verifier/Developer
-  let title = "Document Issuance Subsystem";
+function doGet(e) {
+  var email = getEditorEmail_();
+  var userContext = resolveUserContext_(email);
+  var position = userContext ? String(userContext.position || "").trim().toLowerCase() : "";
+  var isDeveloper = position === "developer";
+
+  // Developer can override module via URL param: ?module=typing
+  var moduleParam = isDeveloper && e && e.parameter && e.parameter.module
+    ? String(e.parameter.module || "").trim().toLowerCase()
+    : "";
+
+  var templateName = "IssuanceIndex";
+  var title = "Document Issuance Subsystem";
 
   if (position === "es ii") {
     templateName = "DashboardIndex";
     title = "Executive Dashboard";
-  } else if (position === "releasing/verifier" || position === "verifier") {
-    // Both Releasing/Verifier and Verifier (if distinct from base Issuance Verifier) might need Typing
-    // The prompt says: Releasing/Verifier -> TypingIndex, Verifier -> IssuanceIndex
-    if (position === "releasing/verifier") {
+  } else if (position === "releasing/verifier") {
+    templateName = "TypingIndex";
+    title = "Typing Records";
+  }
+
+  // Developer module override
+  if (isDeveloper) {
+    if (moduleParam === "typing") {
       templateName = "TypingIndex";
-      title = "Typing Records";
+      title = "Typing Records [DEV]";
+    } else if (moduleParam === "dashboard") {
+      templateName = "DashboardIndex";
+      title = "Executive Dashboard [DEV]";
+    } else if (moduleParam === "issuance") {
+      templateName = "IssuanceIndex";
+      title = "Document Issuance Subsystem [DEV]";
     }
   }
 
@@ -1584,6 +1600,80 @@ function doGet() {
     .evaluate()
     .setTitle(title)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function getDeploymentUrl() {
+  return ScriptApp.getService().getUrl();
+}
+
+function getUserModuleContext() {
+  try {
+    var email = getEditorEmail_();
+    var userContext = resolveUserContext_(email);
+
+    // Use ONLY position — do not inherit isDeveloper from resolveUserContext_
+    // because that function grants isDeveloper=true to the fallback email
+    // regardless of their actual position in the Users sheet.
+    var position = userContext ? String(userContext.position || "").trim().toLowerCase() : "";
+    var isDeveloper = position === "developer";
+
+    Logger.log("[getUserModuleContext] email=" + email +
+      " position=" + position +
+      " isDeveloper=" + isDeveloper);
+
+    var fieldKeys = {};
+    for (var i = 0; i < typingCreateFieldKeys.length; i++) {
+      var k = typingCreateFieldKeys[i];
+      if (typingCreateFieldConfig[k]) {
+        fieldKeys[k] = typingCreateFieldConfig[k].columnName;
+      }
+    }
+
+    var dbHeaders = [];
+    try {
+      var ss = SpreadsheetApp.openById(spreadsheetID);
+      var dbSheet = ss.getSheetByName(databaseSheetName);
+      if (dbSheet && dbSheet.getLastColumn() > 0) {
+        dbHeaders = dbSheet.getRange(1, 1, 1, dbSheet.getLastColumn())
+          .getValues()[0]
+          .map(function(h) { return String(h || "").trim(); })
+          .filter(function(h) { return h !== ""; });
+      }
+    } catch (sheetErr) {
+      Logger.log("[getUserModuleContext] Could not read DB headers: " + sheetErr.message);
+    }
+
+    var modules = [];
+    if (isDeveloper) {
+        modules = [
+          { key: "issuance",  label: "Issuance"  },
+          { key: "typing",    label: "Typing"    },
+          { key: "dashboard", label: "Dashboard" }
+        ];
+    }
+
+    var result = {
+      email:       email,
+      position:    position,
+      isDeveloper: isDeveloper,
+      modules:     modules,
+      fieldKeys:   isDeveloper ? fieldKeys : {},
+      dbHeaders:   isDeveloper ? dbHeaders : []
+    };
+
+    Logger.log("[getUserModuleContext] returning: " + JSON.stringify({
+      email: result.email,
+      position: result.position,
+      isDeveloper: result.isDeveloper,
+      modulesCount: result.modules.length
+    }));
+
+    return result;
+
+  } catch (e) {
+    Logger.log("[getUserModuleContext] FATAL: " + e.toString());
+    throw e;
+  }
 }
 
 function legacy_getInitialData_(batchSize) {
@@ -4798,7 +4888,145 @@ function typing_getTempRecordPrefill_(rowNumber, dateReceived) {
 }
 
 function typing_updateTempRecordEntries_(dataList, batchId) {
-  return { results: [] };
+  var debugId = createDebugId_();
+  var safeList = Array.isArray(dataList) ? dataList : [];
+  var safeBatchId = String(batchId || "batch-" + new Date().getTime()).trim();
+
+  if (!safeList.length) {
+    return { results: [], batchId: safeBatchId, debugId: debugId };
+  }
+
+  // Auth check
+  var sessionEmail = getEditorEmail_();
+  var userContext = resolveUserContext_(sessionEmail);
+  if (!sessionEmail || !userContext.knownUser || !isTypingPositionAllowed_(userContext.position)) {
+    return {
+      results: safeList.map(function() {
+        return { ok: false, message: "Unauthorized.", code: "UNAUTHORIZED", debugId: createDebugId_() };
+      }),
+      batchId: safeBatchId,
+      debugId: debugId
+    };
+  }
+
+  var context;
+  try {
+    context = buildTypingInsertContext_();
+    context.batchId = safeBatchId;
+  } catch (contextError) {
+    Logger.log("[updateTempRecordEntries] Context build failed: " + contextError.toString());
+    return {
+      results: safeList.map(function() {
+        return { ok: false, message: contextError.message || String(contextError), code: "CONTEXT_ERROR", debugId: createDebugId_() };
+      }),
+      batchId: safeBatchId,
+      debugId: debugId
+    };
+  }
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (lockError) {
+    return {
+      results: safeList.map(function() {
+        return { ok: false, message: "Server is busy. Please retry.", code: "LOCK_TIMEOUT", debugId: createDebugId_() };
+      }),
+      batchId: safeBatchId,
+      debugId: debugId
+    };
+  }
+
+  var results = [];
+  try {
+    safeList.forEach(function(student, index) {
+      var entryDebugId = createDebugId_();
+      try {
+        // Map client field names to server field names
+        var normalized = {
+          dateReceived:    String(student.dateReceived    || "").trim(),
+          studentName:     String(student.studentName     || "").trim().toUpperCase(),
+          hei:             String(student.hei             || "").trim(),
+          dateOfGraduation:String(student.dateGraduation  || "").trim(),
+          program:         String(student.program         || "").trim()
+        };
+
+        if (!normalized.studentName || !normalized.dateReceived) {
+          results.push({
+            ok: false,
+            message: "Missing required fields: studentName or dateReceived.",
+            code: "MISSING_FIELDS",
+            index: index,
+            debugId: entryDebugId
+          });
+          return;
+        }
+
+        var insertResult = insertTypingStudentRow_(context, normalized);
+        results.push({
+          ok: true,
+          row: insertResult.row || "",
+          duplicate: !!insertResult.duplicate,
+          studentName: normalized.studentName,
+          index: index,
+          debugId: entryDebugId,
+          message: insertResult.duplicate ? "Duplicate skipped." : "Saved successfully."
+        });
+
+        // Log to IssuanceHistory for audit trail
+        if (!insertResult.duplicate && insertResult.row) {
+          try {
+            appendIssuanceHistory_({
+              row: insertResult.row,
+              id: "",
+              name: normalized.studentName,
+              dateReceived: normalized.dateReceived,
+              dateAccomplished: "",
+              status: "New Record",
+              remarks: "Batch: " + safeBatchId,
+              dateForwarded: "",
+              soNo: "", series: "", dateSOIssuance: ""
+            });
+          } catch (histErr) {
+            Logger.log("[updateTempRecordEntries] History log failed for row " + insertResult.row + ": " + histErr.toString());
+          }
+        }
+
+      } catch (entryError) {
+        Logger.log("[updateTempRecordEntries] Entry " + index + " failed: " + entryError.toString());
+        // Log to save failure sheet
+        try {
+          logTypingCreateFailure_(safeBatchId, student, entryError, 0, 0);
+        } catch (logErr) {}
+
+        results.push({
+          ok: false,
+          message: entryError.message || String(entryError),
+          code: "WRITE_ERROR",
+          index: index,
+          debugId: entryDebugId
+        });
+      }
+    });
+  } finally {
+    lock.releaseLock();
+  }
+
+  var successCount = results.filter(function(r) { return r.ok; }).length;
+  Logger.log("[updateTempRecordEntries] batchId=" + safeBatchId +
+    " total=" + safeList.length + " success=" + successCount +
+    " failed=" + (safeList.length - successCount));
+
+  return {
+    results: results,
+    batchId: safeBatchId,
+    debugId: debugId,
+    summary: {
+      total: safeList.length,
+      saved: successCount,
+      failed: safeList.length - successCount
+    }
+  };
 }
 
 function typing_getSaveBatchProgress_(batchId) {
@@ -4808,24 +5036,49 @@ function typing_getSaveBatchProgress_(batchId) {
 function buildTypingInsertContext_() {
   var ss = SpreadsheetApp.openById(spreadsheetID);
   var sheet = ss.getSheetByName(databaseSheetName);
-  if (!sheet) {
-    throw new Error("Database sheet not found.");
-  }
+  if (!sheet) throw new Error("Database sheet not found.");
 
   var headers = getHeaders_(sheet);
   var batchColumnIndex = getTypingBatchColumnIndex_(headers);
-  var writableFieldKeys = getTypingWritableFieldKeys_();
+  var writableFieldKeys = typingCreateFieldKeys.slice();
+
+  // Apply FieldManagement overrides for current user
+  var sessionEmail = getEditorEmail_();
+  var overrides = getTypingFieldOverridesForEmail_(sessionEmail);
+  overrides.forEach(function(override) {
+    if (writableFieldKeys.indexOf(override.fieldKey) === -1) {
+      writableFieldKeys.push(override.fieldKey);
+      Logger.log("[FieldManagement] Added field '" + override.fieldKey +
+        "' for email '" + sessionEmail + "'");
+    }
+  });
+
   var columnIndexes = {};
-  for (var i = 0; i < writableFieldKeys.length; i++) {
-    var fieldKey = writableFieldKeys[i];
-    var columnName = typingCreateFieldConfig[fieldKey].columnName;
+  writableFieldKeys.forEach(function(fieldKey) {
+    var columnName = (typingCreateFieldConfig[fieldKey] && typingCreateFieldConfig[fieldKey].columnName)
+      || (function() {
+        for (var oi = 0; oi < overrides.length; oi++) {
+          if (overrides[oi].fieldKey === fieldKey) return overrides[oi].columnName;
+        }
+        return "";
+      }())
+      || "";
+
+    if (!columnName) {
+      Logger.log("[FieldManagement] No columnName found for fieldKey: " + fieldKey);
+      return;
+    }
+
     var headerIndex = headers.indexOf(columnName);
     if (headerIndex === -1) {
-      Logger.log("[TYPING VALIDATION WARNING] Missing Database column for typing field: " + columnName);
-      continue;
+      Logger.log("[FieldManagement] Column not found in Database sheet: " + columnName);
+      return;
     }
+
     columnIndexes[fieldKey] = headerIndex;
-  }
+    Logger.log("[FieldManagement] Mapped '" + fieldKey + 
+      "' -> '" + columnName + "' index=" + headerIndex);
+  });
 
   return {
     sheet: sheet,
@@ -4857,6 +5110,7 @@ function findExistingTypingRow_(context, student) {
   var targetBatchId = String(context.batchId || "").trim();
   var targetStudentName = normalizeTypingFieldValue_("studentName", student.studentName);
 
+  // Batch+name check (fast path)
   if (batchColumnIndex != null && targetBatchId) {
     for (var batchRowIndex = 0; batchRowIndex < values.length; batchRowIndex++) {
       var existingBatchId = String(values[batchRowIndex][batchColumnIndex] || "").trim();
@@ -4870,11 +5124,21 @@ function findExistingTypingRow_(context, student) {
     }
   }
 
+  // Full field match — only run if there are fields to actually compare
+  var comparableKeys = typingCreateFieldKeys.filter(function(fieldKey) {
+    return Object.prototype.hasOwnProperty.call(columnIndexes, fieldKey);
+  });
+
+  // If we can't compare any fields, skip duplicate check entirely
+  if (!comparableKeys.length) {
+    Logger.log("[findExistingTypingRow_] No comparable field indexes found — skipping value-based duplicate check.");
+    return 0;
+  }
+
   for (var rowIndex = 0; rowIndex < values.length; rowIndex++) {
     var matches = true;
-    for (var i = 0; i < typingCreateFieldKeys.length; i++) {
-      var fieldKey = typingCreateFieldKeys[i];
-      if (!Object.prototype.hasOwnProperty.call(columnIndexes, fieldKey)) continue;
+    for (var i = 0; i < comparableKeys.length; i++) {
+      var fieldKey = comparableKeys[i];
       var existingValue = normalizeTypingFieldValue_(fieldKey, values[rowIndex][columnIndexes[fieldKey]]);
       var targetValue = normalizeTypingFieldValue_(fieldKey, student[fieldKey]);
       if (existingValue !== targetValue) {
@@ -4890,6 +5154,12 @@ function findExistingTypingRow_(context, student) {
 function insertTypingStudentRow_(context, student) {
   var normalizedStudent = normalizeTypingStudent_(student);
   var duplicateRow = findExistingTypingRow_(context, normalizedStudent);
+  Logger.log("[insertTypingStudentRow_] student=" + normalizedStudent.studentName + 
+    " duplicateRow=" + duplicateRow);
+  if (duplicateRow) {
+    Logger.log("[insertTypingStudentRow_] Skipping as duplicate at row " + duplicateRow);
+    return { ok: true, duplicate: true, row: duplicateRow, student: normalizedStudent };
+  }
   if (duplicateRow) {
     return {
       ok: true,
@@ -5305,7 +5575,10 @@ function normalizeTypingRouteAction_(action) {
     "searchexactname": "searchExactName",
     "gettemprecordprefill": "getTempRecordPrefill",
     "updatetemprecordentries": "updateTempRecordEntries",
-    "getsavebatchprogress": "getSaveBatchProgress"
+    "getsavebatchprogress": "getSaveBatchProgress",
+    "getfieldmanagement":    "getFieldManagement",
+    "savefieldmanagement":   "saveFieldManagement",
+    "deletefieldmanagement": "deleteFieldManagement",
   };
   return map[raw] || raw;
 }
@@ -5338,6 +5611,15 @@ function handleTypingRoute(action, payload) {
 
     case "getSaveBatchProgress":
       return buildHandledRouteResponse_(typing_getSaveBatchProgress_(payload.batchId));
+
+    case "getFieldManagement":
+      return buildHandledRouteResponse_(getAllFieldManagementOverrides_());
+
+    case "saveFieldManagement":
+      return buildHandledRouteResponse_(saveFieldManagementOverride_(payload));
+
+    case "deleteFieldManagement":
+      return buildHandledRouteResponse_(deleteFieldManagementOverride_(payload.sheetRow));
 
     default:
       return buildUnhandledRouteResponse_("typing", normalizedAction || String(action || ""), "Unknown typing action.");
@@ -7203,4 +7485,168 @@ function debugDateColumn() {
   Logger.log("Top 5 Column B values: " + JSON.stringify(topDates));
   Logger.log("Bottom 5 Column B values: " + JSON.stringify(bottomDates));
   Logger.log("Last row: " + lastRow);
+}
+
+const TYPING_FIELD_OVERRIDES_SHEET = "FieldManagement";
+const TYPING_FIELD_OVERRIDE_HEADERS = ["Email", "FieldKey", "ColumnName", "Active"];
+
+function getOrCreateFieldManagementSheet_() {
+  var ss = SpreadsheetApp.openById(spreadsheetID);
+  var sheet = ss.getSheetByName(TYPING_FIELD_OVERRIDES_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(TYPING_FIELD_OVERRIDES_SHEET);
+    sheet.getRange(1, 1, 1, TYPING_FIELD_OVERRIDE_HEADERS.length)
+      .setValues([TYPING_FIELD_OVERRIDE_HEADERS]);
+    Logger.log("[FieldManagement] Sheet created.");
+  }
+  return sheet;
+}
+
+function getTypingFieldOverridesForEmail_(email) {
+  var normalizedEmail = normalizeEmail_(email);
+  if (!normalizedEmail) return [];
+
+  var sheet = getOrCreateFieldManagementSheet_();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+
+  var data = sheet.getRange(2, 1, lastRow - 1, TYPING_FIELD_OVERRIDE_HEADERS.length).getValues();
+  var overrides = [];
+
+  data.forEach(function(row) {
+    var rowEmail = normalizeEmail_(String(row[0] || ""));
+    var fieldKey = String(row[1] || "").trim();
+    var columnName = String(row[2] || "").trim();
+    var active = parseBooleanFlag_(row[3]);
+
+    if (rowEmail === normalizedEmail && fieldKey && columnName && active) {
+      overrides.push({ fieldKey: fieldKey, columnName: columnName });
+    }
+  });
+
+  Logger.log("[FieldManagement] Found " + overrides.length + 
+    " active overrides for email: " + normalizedEmail);
+  return overrides;
+}
+
+function getAllFieldManagementOverrides_() {
+  var userContext = getCurrentUserContext_();
+  if (String(userContext.position || "").trim().toLowerCase() !== "developer") {
+    return { ok: false, message: "Developer access required." };
+  }
+
+  var sheet = getOrCreateFieldManagementSheet_();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { ok: true, overrides: [] };
+
+  var data = sheet.getRange(2, 1, lastRow - 1, TYPING_FIELD_OVERRIDE_HEADERS.length).getValues();
+  var overrides = data.map(function(row, idx) {
+    return {
+      sheetRow: idx + 2,
+      email: String(row[0] || "").trim(),
+      fieldKey: String(row[1] || "").trim(),
+      columnName: String(row[2] || "").trim(),
+      active: parseBooleanFlag_(row[3])
+    };
+  }).filter(function(o) { return o.email || o.fieldKey; });
+
+  return { ok: true, overrides: overrides };
+}
+
+function saveFieldManagementOverride_(payload) {
+  var userContext = getCurrentUserContext_();
+  if (String(userContext.position || "").trim().toLowerCase() !== "developer") {
+    return { ok: false, message: "Developer access required." };
+  }
+
+  var email = normalizeEmail_(payload.email);
+  var fieldKey = String(payload.fieldKey || "").trim();
+  var columnName = String(payload.columnName || "").trim();
+  var active = parseBooleanFlag_(payload.active !== undefined ? payload.active : true);
+
+  if (!email || !fieldKey || !columnName) {
+    return { 
+      ok: false, 
+      message: "Email, fieldKey, and columnName are required." 
+    };
+  }
+
+  var sheet = getOrCreateFieldManagementSheet_();
+
+  // Update existing row
+  if (payload.sheetRow && Number(payload.sheetRow) >= 2) {
+    var targetRow = Number(payload.sheetRow);
+    sheet.getRange(targetRow, 1, 1, 4).setValues([[email, fieldKey, columnName, active]]);
+    Logger.log("[FieldManagement] Updated row " + targetRow + 
+      " email=" + email + " fieldKey=" + fieldKey);
+    return { ok: true, sheetRow: targetRow, message: "Override updated." };
+  }
+
+  // Check for duplicate before inserting
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    var existing = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+    for (var i = 0; i < existing.length; i++) {
+      if (normalizeEmail_(existing[i][0]) === email &&
+          String(existing[i][1]).trim() === fieldKey) {
+        return { 
+          ok: false, 
+          message: "An override for this email + fieldKey already exists at row " + (i + 2) + "." 
+        };
+      }
+    }
+  }
+
+  sheet.appendRow([email, fieldKey, columnName, active]);
+  Logger.log("[FieldManagement] Added new override email=" + email + 
+    " fieldKey=" + fieldKey + " columnName=" + columnName);
+  return { ok: true, sheetRow: sheet.getLastRow(), message: "Override added." };
+}
+
+function deleteFieldManagementOverride_(sheetRow) {
+  var userContext = getCurrentUserContext_();
+  if (String(userContext.position || "").trim().toLowerCase() !== "developer") {
+    return { ok: false, message: "Developer access required." };
+  }
+
+  var targetRow = Number(sheetRow);
+  var sheet = getOrCreateFieldManagementSheet_();
+  if (!targetRow || targetRow < 2 || targetRow > sheet.getLastRow()) {
+    return { ok: false, message: "Invalid row." };
+  }
+
+  sheet.deleteRow(targetRow);
+  Logger.log("[FieldManagement] Deleted row " + targetRow);
+  return { ok: true, message: "Override deleted." };
+}
+
+function debugDeveloperColumns() {
+  var ss = SpreadsheetApp.openById(spreadsheetID);
+  var sheet = ss.getSheetByName(databaseSheetName);
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]
+    .map(function(h) { return String(h || "").trim(); });
+  
+  var columnsToCheck = [
+    "ID",
+    "Name of the Student",
+    "HEI",
+    "Verification: Date Received",
+    "Verification: Date Accomplished",
+    "Verification Status",
+    "Verification: Date Forwarded",
+    "Issuance and Encoding of No.: Assigned Person",
+    "Issuance and Encoding of No.: Date Received",
+    "Issuance and Encoding of No.: Date Accomplished",
+    "Issuance and Encoding of No.: Status",
+    "Issuance and Encoding of No.: Remarks",
+    "Issuance and Encoding of No.: Date Forwarded",
+    "SO No.",
+    "Series",
+    "Date of SO Issuance"
+  ];
+  
+  columnsToCheck.forEach(function(col) {
+    var idx = headers.indexOf(col);
+    Logger.log(col + " => " + (idx === -1 ? "NOT FOUND" : "col " + (idx + 1)));
+  });
 }

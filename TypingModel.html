@@ -4,22 +4,11 @@ var TypingModel = {
   filteredData: [],
   batchStudents: [],
   editingRowID: null,
-  inlineBatchEditRowID: null,
-  previewSO: null,
   searchMode: false,
   activeSearchToken: 0,
   currentPage: 1,
   rowsPerPage: 10,
   totalRows: 0,
-  nextBatchStart: 2,
-  nextBatchSize: 20000,
-  initialBatchSize: 1000,
-  loadingBatches: false,
-  autoPrefillDisabled: false,
-  dateSyncInProgress: false,
-  soPrefixes: [],
-  batchConfirmed: false,
-  batchHasChanges: false,
   verificationFilterMain: ["verified", "deficiency", "unverified"],
   verificationFilterModal: ["verified", "deficiency", "unverified"],
   yearFilter: "all",
@@ -35,9 +24,7 @@ var TypingModel = {
   currentYear: null,        // Currently selected year
   yearBatchProgress: {},    // { '2026': { nextStartRow: 1001, hasMore: true } }
   
-  activeBatchSearchToken: 0,
   lastMainSearchTerm: "",
-  lastBatchSearchTerm: "",
   isSearchingMain: false,
   listenersBound: false,
   lastFocusedStudentRow: null,
@@ -46,13 +33,6 @@ var TypingModel = {
   localSaveFailureRows: [],
   isHistoryLoading: false,
   isSaveFailureLoading: false,
-  isSavingBatch: false,
-  activeSaveRequests: 0,
-  saveRequestQueue: [],
-  currentSavingBatchId: "",
-  currentSavingBatchTotal: 0,
-  currentSavingBatchCompleted: 0,
-  currentSavingBatchLastSavedName: "",
   userRole: "Viewer",
   executionLock: {
     activeModule: "typing",
@@ -133,12 +113,15 @@ var TypingModel = {
   
   lastDatabaseUpdateAt: "0",
   isSyncingRow: false,
-  statusEditConfirmed: false,
   activeMainView: "home",
   historyLoadedOnce: false,
   historyFailureLoadedOnce: false,
   activeHistorySection: "success",
   lastSaveOutcomeSummary: "",
+
+  saveQueue: [],        // { entry, status: 'pending'|'saving'|'saved'|'failed', attempts: 0, error: "" }
+  isSaveThrottling: false,
+  saveThrottleTimer: null,
 
   mergeObjects: function(target, patch) {
     var result = {};
@@ -378,6 +361,33 @@ var TypingModel = {
       ess2InCharge: document.getElementById("temp_ess2_incharge") ? document.getElementById("temp_ess2_incharge").value : "",
       statusOfApplication: document.getElementById("temp_status_of_application") ? document.getElementById("temp_status_of_application").value : ""
     };
+  },
+
+  // Add these methods:
+  addToSaveQueue: function(entry) {
+    // Avoid duplicates
+    var exists = this.saveQueue.some(function(q) {
+      return String(q.entry._row) === String(entry._row);
+    });
+    if (!exists) {
+      this.saveQueue.push({ entry: entry, status: "pending", attempts: 0, error: "" });
+    }
+  },
+
+  updateQueueStatus: function(rowID, status, error) {
+    var item = this.saveQueue.find(function(q) {
+      return String(q.entry._row) === String(rowID);
+    });
+    if (item) {
+      item.status = status;
+      item.error = error || "";
+    }
+  },
+
+  clearSavedFromQueue: function() {
+    this.saveQueue = this.saveQueue.filter(function(q) {
+      return q.status !== "saved";
+    });
   },
 
   setBatchStudents: function(students) {

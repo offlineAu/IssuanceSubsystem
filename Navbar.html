@@ -16,6 +16,19 @@
       <div class="app-navbar-title-wrap">
         <h1 class="app-navbar-title" id="appNavbarTitle">Information Tracking System</h1>
       </div>
+
+      <!-- Developer toolbar: hidden by default, shown only when server confirms isDeveloper -->
+      <div id="devToolbar" style="display:none; align-items:center; gap:8px; margin-left:auto; padding-right:12px;">
+        <div id="devModuleSwitcher" style="display:flex; gap:4px; background:#0f172a; border-radius:8px; padding:4px;"></div>
+        <button onclick="FieldManagement.openPanel()"
+          style="display:flex; align-items:center; gap:6px; padding:6px 12px; background:#3b82f6; color:#fff; border:none; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer;">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
+          </svg>
+          Field Management
+        </button>
+      </div>
     </div>
 
     <div class="app-navbar-navrow">
@@ -25,9 +38,421 @@
           <span id="accountName" class="app-navbar-account-name">Loading...</span>
         </div>
       </div>
-      <div class="app-navbar-tabs" id="navbarTabs">
-        <!-- Tabs injected per role -->
-      </div>
+      <div class="app-navbar-tabs" id="navbarTabs"></div>
     </div>
   </div>
 </nav>
+
+<!-- ── Field Management overlay + panel (outside <nav>) ── -->
+<div id="fieldMgmtOverlay"
+  style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:9998;"
+  onclick="FieldManagement.closePanel()"></div>
+
+<!-- IMPORTANT: only display:none here. flex-direction:column is safe.
+     Never put display:flex — openPanel() sets display:flex when needed. -->
+<div id="fieldMgmtPanel"
+  style="display:none; flex-direction:column; position:fixed; top:0; right:0; width:560px; max-width:100vw; height:100vh; background:#fff; z-index:9999; box-shadow:-4px 0 24px rgba(0,0,0,0.15);">
+
+  <!-- Header -->
+  <div style="padding:20px 24px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; justify-content:space-between; background:#1e293b; color:#fff; flex-shrink:0;">
+    <div>
+      <div style="font-size:16px; font-weight:600;">Field Management</div>
+      <div style="font-size:12px; color:#94a3b8; margin-top:2px;">Developer only — email-level field overrides</div>
+    </div>
+    <button onclick="FieldManagement.closePanel()"
+      style="background:none; border:none; color:#fff; font-size:20px; cursor:pointer; padding:4px 8px; line-height:1;">&times;</button>
+  </div>
+
+  <!-- Form -->
+  <div style="padding:20px 24px; border-bottom:1px solid #e5e7eb; background:#f8fafc; flex-shrink:0;">
+    <div style="font-size:13px; font-weight:600; color:#374151; margin-bottom:12px;">
+      <span id="fieldMgmtFormTitle">Add Override</span>
+    </div>
+    <input type="hidden" id="fmSheetRow" value="">
+    <div style="display:grid; gap:10px;">
+
+      <div>
+        <label style="font-size:12px; color:#6b7280; display:block; margin-bottom:4px;">Email</label>
+        <input type="email" id="fmEmail" placeholder="user@example.com"
+          style="width:100%; padding:8px 10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        <div>
+          <label style="font-size:12px; color:#6b7280; display:block; margin-bottom:4px;">Field Key</label>
+          <!-- Options populated dynamically by FieldManagement.loadFormOptions() -->
+          <select id="fmFieldKey" onchange="FieldManagement.onFieldKeyChange()"
+            style="width:100%; padding:8px 10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
+            <option value="">— loading —</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px; color:#6b7280; display:block; margin-bottom:4px;">Column Name</label>
+          <!-- Options populated dynamically by FieldManagement.loadFormOptions() -->
+          <select id="fmColumnName"
+            style="width:100%; padding:8px 10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;">
+            <option value="">— loading —</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="fmActive" checked style="width:16px; height:16px; cursor:pointer;">
+        <label for="fmActive" style="font-size:13px; color:#374151; cursor:pointer;">Active</label>
+      </div>
+
+      <div id="fmError"
+        style="display:none; color:#dc2626; font-size:12px; padding:6px 10px; background:#fef2f2; border:1px solid #fecaca; border-radius:6px;"></div>
+
+      <div style="display:flex; gap:8px;">
+        <button onclick="FieldManagement.saveOverride()"
+          style="padding:8px 18px; background:#1e293b; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; font-weight:500;">
+          Save
+        </button>
+        <button onclick="FieldManagement.resetForm()"
+          style="padding:8px 18px; background:#f1f5f9; color:#374151; border:1px solid #d1d5db; border-radius:6px; font-size:13px; cursor:pointer;">
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- List -->
+  <div style="flex:1; overflow-y:auto; padding:20px 24px;">
+    <div style="font-size:13px; font-weight:600; color:#374151; margin-bottom:12px;">Current Overrides</div>
+    <div id="fieldMgmtList">
+      <div style="color:#9ca3af; font-size:13px;">Loading...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+var FieldManagement = {
+  overrides: [],
+  // Populated from server: { fieldKey -> defaultColumnName }
+  fieldKeyMap: {},
+  // All Database sheet headers, from server
+  dbHeaders: [],
+
+  // ── INIT ──────────────────────────────────────────────────────────────────
+  // Called on DOMContentLoaded.
+  // Uses getUserModuleContext() which reads Session.getActiveUser() on the
+  // server — not the auth fallback — so it correctly identifies the real user.
+  init: function() {
+    var self = this;
+    google.script.run
+      .withSuccessHandler(function(context) {
+        console.log("[FM init] context received:", JSON.stringify(context));
+        console.log("[FM init] isDeveloper:", context && context.isDeveloper);
+
+        if (!context || !context.isDeveloper) {
+          console.log("[FM init] BLOCKED — isDeveloper is falsy, toolbar stays hidden");
+          return;
+        }
+
+        var toolbar = document.getElementById("devToolbar");
+        console.log("[FM init] toolbar element found:", !!toolbar);
+        console.log("[FM init] toolbar current display:", toolbar ? toolbar.style.display : "N/A");
+
+        if (toolbar) {
+          toolbar.style.display = "flex";
+          console.log("[FM init] toolbar display set to flex, actual now:", toolbar.style.display);
+        }
+
+        // Build module switcher
+        var switcher = document.getElementById("devModuleSwitcher");
+        if (switcher && context.modules && context.modules.length) {
+          var modules = context.modules;
+
+          // Get the real deployment URL from the server
+          google.script.run
+            .withSuccessHandler(function(baseUrl) {
+              if (!baseUrl) return;
+              var currentUrl = window.location.href;
+
+              switcher.innerHTML = modules.map(function(mod) {
+                var isActive = currentUrl.indexOf("module=" + mod.key) !== -1 ||
+                  (currentUrl.indexOf("module=") === -1 && mod.key === "issuance");
+
+                return '<a href="' + baseUrl + '?module=' + mod.key + '" ' +
+                  'target="_top" ' +
+                  'style="padding:5px 12px; border-radius:5px; font-size:12px; font-weight:500; ' +
+                  'text-decoration:none; ' +
+                  (isActive ? 'background:#3b82f6; color:#fff;' : 'color:#94a3b8;') +
+                  '">' + mod.label + '</a>';
+              }).join("");
+            })
+            .withFailureHandler(function() {})
+            .getDeploymentUrl();
+        }
+
+        if (context.fieldKeys) {
+          self.fieldKeyMap = context.fieldKeys;
+        }
+        if (context.dbHeaders) {
+          self.dbHeaders = context.dbHeaders;
+        }
+
+        // Final check — confirm toolbar is actually visible after all code ran
+        var toolbarFinal = document.getElementById("devToolbar");
+        console.log("[FM init] toolbar display AFTER all code:", toolbarFinal ? toolbarFinal.style.display : "element not found");
+        console.log("[FM init] devToolbar count in DOM:", document.querySelectorAll("#devToolbar").length);
+      })
+      .withFailureHandler(function(err) {
+        console.error("[FM init] FAILED:", err);
+      })
+      .getUserModuleContext();
+  },
+
+  // ── PANEL OPEN / CLOSE ────────────────────────────────────────────────────
+  openPanel: function() {
+    var panel   = document.getElementById("fieldMgmtPanel");
+    var overlay = document.getElementById("fieldMgmtOverlay");
+    // Set display:flex here — panel starts as display:none in HTML
+    if (panel)   panel.style.display   = "flex";
+    if (overlay) overlay.style.display = "block";
+    this.resetForm();
+    this.populateFormDropdowns();
+    this.loadOverrides();
+  },
+
+  closePanel: function() {
+    var panel   = document.getElementById("fieldMgmtPanel");
+    var overlay = document.getElementById("fieldMgmtOverlay");
+    if (panel)   panel.style.display   = "none";
+    if (overlay) overlay.style.display = "none";
+  },
+
+  // ── FORM DROPDOWNS ────────────────────────────────────────────────────────
+  // Populates Field Key from typingCreateFieldConfig keys (server-supplied)
+  // and Column Name from actual Database sheet headers (server-supplied).
+  populateFormDropdowns: function() {
+    var self = this;
+    var fieldKeyEl  = document.getElementById("fmFieldKey");
+    var colNameEl   = document.getElementById("fmColumnName");
+
+    // Field Key dropdown — from typingCreateFieldConfig
+    if (fieldKeyEl) {
+      var keys = Object.keys(self.fieldKeyMap);
+      if (keys.length) {
+        fieldKeyEl.innerHTML = '<option value="">— select —</option>' +
+          keys.map(function(k) {
+            return '<option value="' + k + '">' + k + '</option>';
+          }).join("");
+      } else {
+        // Fallback if server hasn't responded yet
+        fieldKeyEl.innerHTML = '<option value="">— unavailable —</option>';
+      }
+    }
+
+    // Column Name dropdown — from actual Database sheet headers
+    if (colNameEl) {
+      if (self.dbHeaders.length) {
+        colNameEl.innerHTML = '<option value="">— select —</option>' +
+          self.dbHeaders.map(function(h) {
+            return '<option value="' + self.escHtml(h) + '">' + self.escHtml(h) + '</option>';
+          }).join("");
+      } else {
+        colNameEl.innerHTML = '<option value="">— unavailable —</option>';
+      }
+    }
+  },
+
+  // When field key changes, auto-select the default column name
+  onFieldKeyChange: function() {
+    var fieldKey  = (document.getElementById("fmFieldKey")  || {}).value || "";
+    var colNameEl = document.getElementById("fmColumnName");
+    if (colNameEl && fieldKey && this.fieldKeyMap[fieldKey]) {
+      colNameEl.value = this.fieldKeyMap[fieldKey];
+    }
+  },
+
+  // ── FORM RESET ────────────────────────────────────────────────────────────
+  resetForm: function() {
+    var els = ["fmSheetRow", "fmEmail", "fmFieldKey", "fmColumnName"];
+    els.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.value = "";
+    });
+    var activeEl = document.getElementById("fmActive");
+    if (activeEl) activeEl.checked = true;
+    var titleEl = document.getElementById("fieldMgmtFormTitle");
+    if (titleEl) titleEl.textContent = "Add Override";
+    this.hideError();
+  },
+
+  showError: function(msg) {
+    var el = document.getElementById("fmError");
+    if (!el) return;
+    el.textContent = msg;
+    el.style.display = "block";
+  },
+
+  hideError: function() {
+    var el = document.getElementById("fmError");
+    if (el) el.style.display = "none";
+  },
+
+  // ── LOAD OVERRIDES ────────────────────────────────────────────────────────
+  loadOverrides: function() {
+    var self   = this;
+    var listEl = document.getElementById("fieldMgmtList");
+    if (listEl) listEl.innerHTML = '<div style="color:#9ca3af; font-size:13px;">Loading...</div>';
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        var unwrapped = (result && result.data) ? result.data : result;
+        self.overrides = (unwrapped && Array.isArray(unwrapped.overrides))
+          ? unwrapped.overrides : [];
+        self.renderList();
+      })
+      .withFailureHandler(function(err) {
+        if (listEl) {
+          listEl.innerHTML = '<div style="color:#dc2626; font-size:13px;">Failed to load: ' +
+            ((err && err.message) || "Unknown error") + '</div>';
+        }
+      })
+      .routeModule("typing", "getFieldManagement", {});
+  },
+
+  // ── RENDER LIST ───────────────────────────────────────────────────────────
+  renderList: function() {
+    var self   = this;
+    var listEl = document.getElementById("fieldMgmtList");
+    if (!listEl) return;
+
+    if (!self.overrides.length) {
+      listEl.innerHTML = '<div style="color:#9ca3af; font-size:13px; text-align:center; padding:24px 0;">No overrides configured yet.</div>';
+      return;
+    }
+
+    listEl.innerHTML = self.overrides.map(function(o) {
+      var badge = o.active
+        ? '<span style="background:#dcfce7; color:#166534; font-size:11px; padding:2px 8px; border-radius:12px; font-weight:500;">Active</span>'
+        : '<span style="background:#f1f5f9; color:#6b7280; font-size:11px; padding:2px 8px; border-radius:12px;">Inactive</span>';
+
+      return '<div style="border:1px solid #e5e7eb; border-radius:8px; padding:12px 14px; margin-bottom:8px; background:#fff;">' +
+        '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">' +
+          '<div style="flex:1; min-width:0;">' +
+            '<div style="font-size:13px; font-weight:500; color:#111827; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' +
+              self.escHtml(o.email) +
+            '</div>' +
+            '<div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; align-items:center;">' +
+              '<span style="font-size:12px; color:#4b5563; background:#f1f5f9; padding:2px 8px; border-radius:4px; font-family:monospace;">' +
+                self.escHtml(o.fieldKey) +
+              '</span>' +
+              '<span style="font-size:12px; color:#9ca3af;">\u2192</span>' +
+              '<span style="font-size:12px; color:#4b5563; background:#f1f5f9; padding:2px 8px; border-radius:4px;">' +
+                self.escHtml(o.columnName) +
+              '</span>' +
+              badge +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex; gap:6px; flex-shrink:0;">' +
+            '<button onclick="FieldManagement.editOverride(' + o.sheetRow + ')" ' +
+              'style="padding:5px 10px; font-size:12px; background:#f1f5f9; border:1px solid #d1d5db; border-radius:5px; cursor:pointer; color:#374151;">Edit</button>' +
+            '<button onclick="FieldManagement.deleteOverride(' + o.sheetRow + ', \'' + self.escHtml(o.email) + '\')" ' +
+              'style="padding:5px 10px; font-size:12px; background:#fef2f2; border:1px solid #fecaca; color:#dc2626; border-radius:5px; cursor:pointer;">Delete</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join("");
+  },
+
+  // ── EDIT ──────────────────────────────────────────────────────────────────
+  editOverride: function(sheetRow) {
+    var override = null;
+    for (var i = 0; i < this.overrides.length; i++) {
+      if (this.overrides[i].sheetRow === sheetRow) { override = this.overrides[i]; break; }
+    }
+    if (!override) return;
+
+    var setVal = function(id, val) {
+      var el = document.getElementById(id);
+      if (el) el.value = val !== undefined ? val : "";
+    };
+    setVal("fmSheetRow",   override.sheetRow);
+    setVal("fmEmail",      override.email);
+    setVal("fmFieldKey",   override.fieldKey);
+    setVal("fmColumnName", override.columnName);
+
+    var activeEl = document.getElementById("fmActive");
+    if (activeEl) activeEl.checked = !!override.active;
+
+    var titleEl = document.getElementById("fieldMgmtFormTitle");
+    if (titleEl) titleEl.textContent = "Edit Override";
+
+    this.hideError();
+  },
+
+  // ── SAVE ──────────────────────────────────────────────────────────────────
+  saveOverride: function() {
+    var self = this;
+    this.hideError();
+
+    var getVal = function(id) {
+      var el = document.getElementById(id);
+      // Works for both <input> and <select>
+      return el ? String(el.value || "").trim() : "";
+    };
+
+    var email      = getVal("fmEmail");
+    var fieldKey   = getVal("fmFieldKey");
+    var columnName = getVal("fmColumnName");
+    var active     = !!((document.getElementById("fmActive") || {}).checked);
+    var sheetRow   = getVal("fmSheetRow");
+
+    if (!email)      { self.showError("Email is required.");       return; }
+    if (!fieldKey)   { self.showError("Field Key is required.");   return; }
+    if (!columnName) { self.showError("Column Name is required."); return; }
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        var unwrapped = (result && result.data) ? result.data : result;
+        if (unwrapped && unwrapped.ok) {
+          self.resetForm();
+          self.loadOverrides();
+        } else {
+          self.showError((unwrapped && unwrapped.message) || "Save failed.");
+        }
+      })
+      .withFailureHandler(function(err) {
+        self.showError("Error: " + ((err && err.message) || "Unknown error"));
+      })
+      .routeModule("typing", "saveFieldManagement", {
+        email: email, fieldKey: fieldKey, columnName: columnName,
+        active: active, sheetRow: sheetRow ? Number(sheetRow) : null
+      });
+  },
+
+  // ── DELETE ────────────────────────────────────────────────────────────────
+  deleteOverride: function(sheetRow, email) {
+    var self = this;
+    if (!confirm("Delete override for " + email + "?")) return;
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        var unwrapped = (result && result.data) ? result.data : result;
+        if (unwrapped && unwrapped.ok) {
+          self.loadOverrides();
+        } else {
+          alert((unwrapped && unwrapped.message) || "Delete failed.");
+        }
+      })
+      .withFailureHandler(function(err) {
+        alert("Error: " + ((err && err.message) || "Unknown error"));
+      })
+      .routeModule("typing", "deleteFieldManagement", { sheetRow: sheetRow });
+  },
+
+  escHtml: function(str) {
+    return String(str || "")
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+};
+
+document.addEventListener("DOMContentLoaded", function() {
+  FieldManagement.init();
+});
+</script>

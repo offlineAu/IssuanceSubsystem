@@ -174,25 +174,19 @@ var TypingView = {
   },
 
   renderPagination: function() {
-    var container = this.getEl("pagination");
+    var container = this.getEl("typingPagination"); // correct ID
     if (!container) return;
     container.innerHTML = "";
 
     var totalPages = Math.ceil(Model.filteredData.length / Model.rowsPerPage);
     var current = Model.currentPage;
     var safeTotal = Math.max(1, totalPages);
-    if (current > safeTotal) current = safeTotal;
-    if (current < 1) current = 1;
 
-    var pageInput = this.getEl("pageJumpInput");
-    if (pageInput) {
-      pageInput.max = String(safeTotal);
-      pageInput.value = String(current);
-    }
-    var pageMeta = this.getEl("pageMeta");
-    if (pageMeta) {
-      pageMeta.textContent = "Page " + current + " of " + safeTotal;
-    }
+    var pageInput = this.getEl("typingPageJumpInput"); // correct ID
+    if (pageInput) pageInput.value = String(current);
+
+    var pageMeta = this.getEl("typingPageMeta");
+    if (pageMeta) pageMeta.textContent = "Page " + current + " of " + safeTotal;
 
     if (totalPages <= 1) return;
 
@@ -201,15 +195,36 @@ var TypingView = {
     var end = Math.min(totalPages, start + maxVisible - 1);
     if (end - start < maxVisible - 1) start = Math.max(1, end - maxVisible + 1);
 
-    if (current > 1) container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(" + (current - 1) + ")'><i class='fa-solid fa-chevron-left'></i></button>";
-    if (start > 1) container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(1)'>1</button>" + (start > 2 ? "<span class='text-muted mx-1'>...</span>" : "");
-
+    if (current > 1) {
+      container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(" + (current - 1) + ")'>&laquo;</button>";
+    }
+    if (start > 1) {
+      container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(1)'>1</button>";
+      if (start > 2) container.innerHTML += "<span class='text-muted mx-1'>...</span>";
+    }
     for (var i = start; i <= end; i++) {
       container.innerHTML += "<button type='button' class='page-btn" + (i === current ? " active" : "") + "' onclick='Controller.renderPage(" + i + ")'>" + i + "</button>";
     }
+    if (end < totalPages) {
+      if (end < totalPages - 1) container.innerHTML += "<span class='text-muted mx-1'>...</span>";
+      container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(" + totalPages + ")'>" + totalPages + "</button>";
+    }
+    if (current < totalPages) {
+      container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(" + (current + 1) + ")'>&raquo;</button>";
+    }
+  },
 
-    if (end < totalPages) container.innerHTML += (end < totalPages - 1 ? "<span class='text-muted mx-1'>...</span>" : "") + "<button type='button' class='page-btn' onclick='Controller.renderPage(" + totalPages + ")'>" + totalPages + "</button>";
-    if (current < totalPages) container.innerHTML += "<button type='button' class='page-btn' onclick='Controller.renderPage(" + (current + 1) + ")'><i class='fa-solid fa-chevron-right'></i></button>";
+  updateStatusText: function() {
+    var status = this.getEl("typingStatusText"); // correct ID
+    if (!status) return;
+    var visibleCount = Model.filteredData.length;
+    if (!visibleCount) {
+      status.textContent = "Showing 0 records";
+      return;
+    }
+    var start = (Model.currentPage - 1) * Model.rowsPerPage + 1;
+    var end = Math.min(start + Model.rowsPerPage - 1, visibleCount);
+    status.textContent = "Showing " + start + "-" + end + " of " + visibleCount + " records";
   },
 
   updateStatusText: function() {
@@ -277,60 +292,80 @@ var TypingView = {
       this.showMainSearchLoading();
       return;
     }
+
     var start = (page - 1) * Model.rowsPerPage;
     var end = start + Model.rowsPerPage;
     var rows = Model.filteredData.slice(start, end);
-    var tbody = this.getEl("searchResults");
-    var mobileContainer = this.getEl("searchResultsMobile");
+    var tbody = this.getEl("typingSearchResults"); // correct ID
     if (!tbody) return;
-    tbody.innerHTML = "";
-    if (mobileContainer) mobileContainer.innerHTML = "";
+
+    // Remove spinner row if present
+    var spinner = this.getEl("searchSpinnerRow");
+    if (spinner) spinner.style.display = "none";
+
+    // Clear existing data rows (keep spinner row)
+    Array.from(tbody.querySelectorAll("tr:not(#searchSpinnerRow)")).forEach(function(tr) {
+      tr.remove();
+    });
 
     if (!rows.length) {
       this.renderEmpty("No records found");
       return;
     }
 
+    // Typing table columns — matches your HTML headers exactly
+    var typingColumns = [
+      { name: "Date Received",                    label: "Date Received" },
+      { name: "Target Release Date",              label: "Target Release" },
+      { name: "Name of the Student",              label: "Student Name" },
+      { name: "Transaction Type",                 label: "Transaction" },
+      { name: "HEI",                              label: "HEI" },
+      { name: "HEI: Address",                     label: "Address" },
+      { name: "Date of Graduation",               label: "Graduation" },
+      { name: "Program",                          label: "Program" },
+      { name: "ES II In-charge of the Program",   label: "ES II In-charge" },
+      { name: "OR No.",                           label: "OR No." },
+      { name: "OR: Date Issued",                  label: "OR Date" },
+      { name: "Status of the Application",        label: "Status" }
+    ];
+
     var cell = function(value) {
       return "<div class='cell-wrap'>" + (value || "") + "</div>";
     };
 
-    var config = this.getRecordViewConfig();
-    var tableColumns = Array.isArray(config.tableColumns) ? config.tableColumns : [];
-
     rows.forEach(function(r) {
       var tr = document.createElement("tr");
       tr.dataset.row = r._row;
-      tr.innerHTML = tableColumns.map(function(column) {
-        return "<td>" + cell(View.escapeHtml(r[column.name] || "")) + "</td>";
+      tr.innerHTML = typingColumns.map(function(col) {
+        return "<td>" + cell(View.escapeHtml(r[col.name] || "")) + "</td>";
       }).join("");
-      tr.classList.add("show");
       tbody.appendChild(tr);
-
-      if (mobileContainer) {
-        var extraColumns = tableColumns.filter(function(column) { return !column.isIdentity; }).slice(0, 6);
-        var card = document.createElement("button");
-        card.type = "button";
-        card.className = "search-result-card";
-        card.dataset.row = r._row;
-        card.innerHTML =
-          "<div class='search-result-card-top'>" +
-            "<div class='search-result-name'>" + View.escapeHtml(r["Name of the Student"] || "") + "</div>" +
-            "<div class='search-result-id'>" + View.escapeHtml(r["Program"] || "-") + "</div>" +
-          "</div>" +
-          "<div class='search-result-hey'>" + View.escapeHtml(r.HEI || "-") + "</div>" +
-          "<div class='search-result-meta-grid'>" +
-            extraColumns.map(function(column) {
-              return "<div><span>" + View.escapeHtml(column.label || column.name || "") + "</span><strong>" + View.escapeHtml(r[column.name] || "-") + "</strong></div>";
-            }).join("") +
-          "</div>";
-        mobileContainer.appendChild(card);
-      }
     });
 
     this.renderPagination();
     this.updateStatusText();
-    this.renderReportAnalytics();
+  },
+
+  renderEmpty: function(message) {
+    var tbody = this.getEl("typingSearchResults");
+    if (!tbody) return;
+    // Remove existing data rows
+    Array.from(tbody.querySelectorAll("tr:not(#searchSpinnerRow)")).forEach(function(tr) {
+      tr.remove();
+    });
+    var tr = document.createElement("tr");
+    tr.innerHTML = "<td colspan='12' class='text-center py-4'>" + message + "</td>";
+    tbody.appendChild(tr);
+  },
+
+  showMainSearchLoading: function() {
+    var tbody = this.getEl("typingSearchResults");
+    if (!tbody) return;
+    Array.from(tbody.querySelectorAll("tr:not(#searchSpinnerRow)")).forEach(function(tr) {
+      tr.remove();
+    });
+    var spinner = this.getEl("searchSpinnerRow");
+    if (spinner) spinner.style.display = "";
   },
 
   renderEmpty: function(message) {

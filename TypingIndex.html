@@ -12,7 +12,7 @@
     <?!= include('TypingStyles'); ?>
   </head>
   <body>
-    <?!= include('Navbar'); ?>
+    <?!= HtmlService.createHtmlOutputFromFile('Navbar').getContent(); ?>
     <script>
       // Global variable assignment for Typing module to maintain its standalone context
       var Model, Service, View, Controller;
@@ -54,6 +54,11 @@
 
       function saveEdit() {
         if (typeof Controller !== "undefined") Controller.saveEdit();
+      }
+
+      function closeAddRecordModal() {
+        var modal = document.getElementById("addRecordModal");
+        if (modal) modal.classList.remove("show");
       }
     </script>
   </body>

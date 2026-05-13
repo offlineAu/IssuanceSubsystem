@@ -164,7 +164,19 @@ const typingTableColumns = [
   "OR No.",
   "OR: Date Issued",
   "Status of the Application",
-  "DATE RETURN BY CHA CHA"
+  
+  "Status of Course/Evaluation: Date Received",
+  "Status of Course/Evaluation: Date Accomplished",
+  "Status of Course/Evaluation: Date Forwarded",
+  "Evaluation Status",
+  "Application Remarks",
+  "Assigned Person",
+  "Verification: Date Received",
+  "Verification: Date Accomplished",
+  "Verification Status",
+  "Verification: Remarks",
+  "Verification: Date Forwarded",
+  "Issuance and Encoding of No.: Assigned Person"
 ];
 
 const historyHeaders = [
@@ -7048,6 +7060,111 @@ function getDataByYear(module, year, batchSize, startRow) {
  */
 function loadRemainingDataByYear(module, year, startRow, batchSize) {
   return getDataByYear(module, year, batchSize, startRow);
+}
+
+function getRefSheetData() {
+  var ss = SpreadsheetApp.openById(spreadsheetID);
+  var sheet = ss.getSheetByName("Ref"); // adjust sheet name if different
+  if (!sheet || sheet.getLastRow() <= 1) {
+    return { programs: [], heis: [] };
+  }
+
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0].map(function(h) { return String(h || "").trim(); });
+
+  var programIdx = headers.indexOf("Program");
+  var es2Idx = headers.indexOf("ES II In-charge of the Program");
+  var heiIdx = headers.indexOf("HEI");
+  var heiAddressIdx = headers.indexOf("HEI Address");
+
+  var programs = [];
+  var heis = [];
+  var programMap = {}; // program -> es2
+  var heiMap = {};     // hei -> address
+
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    var program = String(row[programIdx] || "").trim();
+    var es2 = String(row[es2Idx] || "").trim();
+    var hei = String(row[heiIdx] || "").trim();
+    var heiAddress = String(row[heiAddressIdx] || "").trim();
+
+    if (program && !programMap[program]) {
+      programMap[program] = es2;
+      programs.push({ program: program, es2: es2 });
+    }
+    if (hei && !heiMap[hei]) {
+      heiMap[hei] = heiAddress;
+      heis.push({ hei: hei, address: heiAddress });
+    }
+  }
+
+  return {
+    programs: programs,
+    heis: heis,
+    programMap: programMap,
+    heiMap: heiMap
+  };
+}
+
+function saveTypingRecord(payload) {
+  var debugId = createDebugId_();
+  try {
+    var row = Number(payload.row);
+    if (!row || row < 2) {
+      return { ok: false, message: "Invalid row.", debugId: debugId };
+    }
+
+    var ss = SpreadsheetApp.openById(spreadsheetID);
+    var sheet = ss.getSheetByName(databaseSheetName);
+    if (!sheet) return { ok: false, message: "Sheet not found.", debugId: debugId };
+
+    var headers = getHeaders_(sheet);
+
+    var fieldMap = {
+      "OR No.": payload.orNo,
+      "OR: Date Issued": payload.orDateIssued,
+      "Status of the Application": payload.statusOfApplication,
+      "Status of Course/Evaluation: Date Received": payload.evalDateReceived,
+      "Status of Course/Evaluation: Date Accomplished": payload.evalDateAccomplished,
+      "Status of Course/Evaluation: Date Forwarded": payload.evalDateForwarded,
+      "Evaluation Status": payload.evaluationStatus,
+      "Application Remarks": payload.applicationRemarks,
+      "Assigned Person": payload.assignedPerson,
+      "Verification: Date Received": payload.verifDateReceived,
+      "Verification: Date Accomplished": payload.verifDateAccomplished,
+      "Verification Status": payload.verifStatus,
+      "Verification: Remarks": payload.verifRemarks,
+      "Verification: Date Forwarded": payload.verifDateForwarded,
+      "Issuance and Encoding of No.: Assigned Person": payload.issuanceAssignedPerson
+    };
+
+    var dateFields = [
+      "OR: Date Issued",
+      "Status of Course/Evaluation: Date Received",
+      "Status of Course/Evaluation: Date Accomplished",
+      "Status of Course/Evaluation: Date Forwarded",
+      "Verification: Date Received",
+      "Verification: Date Accomplished",
+      "Verification: Date Forwarded"
+    ];
+
+    Object.keys(fieldMap).forEach(function(colName) {
+      var colIdx = headers.indexOf(colName);
+      if (colIdx === -1) return;
+      var value = fieldMap[colName] || "";
+      if (dateFields.indexOf(colName) !== -1 && value) {
+        value = parseIsoDate_(value) || value;
+      }
+      sheet.getRange(row, colIdx + 1).setValue(value);
+    });
+
+    markDatabaseRowUpdated_(row);
+
+    return { ok: true, row: row, debugId: debugId, message: "Saved successfully." };
+  } catch (e) {
+    return { ok: false, message: e.message || String(e), debugId: debugId };
+  }
 }
 
 /* Helper functions for module-specific configuration */

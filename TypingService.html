@@ -32,14 +32,19 @@ var TypingService = {
       .getYearsSummary("typing");
   },
 
-  getDataByYear: function(year, batchSize, onSuccess) {
+  getDataByYear: function(year, batchSize, nextScanFrom, onSuccess) {
+    // Handle old 3-arg call signature (nextScanFrom omitted)
+    if (typeof nextScanFrom === "function") {
+      onSuccess = nextScanFrom;
+      nextScanFrom = undefined;
+    }
     google.script.run
       .withSuccessHandler(onSuccess || function(){})
       .withFailureHandler(function(err) {
         console.error("getDataByYear failed:", err);
         if (onSuccess) onSuccess({ data: [], year: year, total: 0, success: false, error: err });
       })
-      .getDataByYear("typing", year, batchSize);
+      .getDataByYear("typing", year, batchSize, nextScanFrom);
   },
 
   loadRemainingDataByYear: function(year, startRow, batchSize, onSuccess) {
@@ -50,6 +55,23 @@ var TypingService = {
         if (onSuccess) onSuccess({ data: [], year: year, success: false, error: err });
       })
       .loadRemainingDataByYear("typing", year, startRow, batchSize);
+  },
+
+  getRefSheetData: function(onSuccess) {
+    google.script.run
+      .withSuccessHandler(onSuccess || function(){})
+      .withFailureHandler(function(err) {
+        console.error("getRefSheetData failed:", err);
+        if (onSuccess) onSuccess({ programs: [], heis: [] });
+      })
+      .getRefSheetData();
+  },
+
+  saveExistingRecord: function(payload, onSuccess, onFailure) {
+    var runner = google.script.run
+      .withSuccessHandler(onSuccess || function(){});
+    if (onFailure) runner = runner.withFailureHandler(onFailure);
+    runner.saveTypingRecord(payload);
   },
 
   searchExactName: function(term, onSuccess) {

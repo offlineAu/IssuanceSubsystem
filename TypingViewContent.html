@@ -57,7 +57,6 @@
             <th>OR No.</th>
             <th>OR Date</th>
             <th>Status</th>
-            <th>Date Return</th>
           </tr>
         </thead>
         <tbody id="typingSearchResults">
@@ -151,87 +150,225 @@
   </section>
 </main>
 
-<!-- Modal for editing student -->
-<div id="editModal" class="modal">
-  <div class="modal-content modal-edit-layout">
-    <!-- Header -->
-    <div class="section-header d-flex justify-content-between align-items-center">
-      <div class="student-meta">
-        <h4>Student Information</h4>
-        <div id="studentSummary" class="d-flex align-items-center gap-2"></div>
+<!-- ADD RECORD MODAL -->
+<div id="addRecordModal" class="modal">
+  <div class="modal-content" style="max-width:700px; height:auto; flex-direction:column;">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <h4 class="fw-bold mb-0">Add Record</h4>
+      <button type="button" class="btn-close" onclick="closeAddRecordModal()"></button>
+    </div>
+
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label fw-semibold">Date Received <span class="text-danger">*</span></label>
+        <input id="temp_date_received" type="date" class="form-control">
+        <div id="error_temp_date_received" class="field-error-msg"></div>
       </div>
-      <div class="text-end">
-        <p class="text-muted small mb-0">Type the student details here, add them to the batch, then save once the list is complete.</p>
-        <p class="text-muted small fst-italic">Complete all required fields.</p>
+      <div class="col-md-6">
+        <label class="form-label fw-semibold">Target Release Date</label>
+        <input id="temp_target_release_date" type="date" class="form-control" readonly>
+      </div>
+      <div class="col-12">
+        <label class="form-label fw-semibold">Name of the Student <span class="text-danger">*</span></label>
+        <input id="temp_student_name" type="text" class="form-control" placeholder="ALL CAPS">
+        <div id="error_temp_student_name" class="field-error-msg"></div>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-semibold">Transaction Type</label>
+        <select id="temp_transaction_type" class="form-select">
+          <option value="">-- Select --</option>
+          <option value="Walk-In">Walk-In</option>
+          <option value="Online">Online</option>
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-semibold">HEI <span class="text-danger">*</span></label>
+        <input id="temp_hei" type="text" class="form-control" list="temp_hei_list" placeholder="Search HEI">
+        <datalist id="temp_hei_list"></datalist>
+        <div id="error_temp_hei" class="field-error-msg"></div>
+      </div>
+      <div class="col-12">
+        <label class="form-label fw-semibold">HEI Address</label>
+        <input id="temp_hei_address" type="text" class="form-control" readonly placeholder="Auto-filled from HEI">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-semibold">Date of Graduation <span class="text-danger">*</span></label>
+        <input id="temp_date_graduation" type="date" class="form-control">
+        <div id="error_temp_date_graduation" class="field-error-msg"></div>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-semibold">Program <span class="text-danger">*</span></label>
+        <input id="temp_program" type="text" class="form-control" list="temp_program_list" placeholder="Search Program">
+        <datalist id="temp_program_list"></datalist>
+        <div id="error_temp_program" class="field-error-msg"></div>
+      </div>
+      <div class="col-12">
+        <label class="form-label fw-semibold">ES II In-charge</label>
+        <input id="temp_es2_incharge" type="text" class="form-control" readonly placeholder="Auto-filled from Program">
       </div>
     </div>
 
-    <div class="row g-0">
-      <!-- Form Area -->
-      <div class="col-lg-7 form-container">
-        <h5 class="fw-bold mb-4" style="color: var(--prussian-blue);">Temp Record Intake</h5>
-        
-        <div class="row g-4">
-          <div class="col-md-6">
-            <label class="form-label-custom">Date Received <span class="text-danger">*</span></label>
-            <input id="temp_date_received" type="date" class="form-control-custom" autocomplete="off">
-            <div id="error_temp_date_received" class="field-error-msg" aria-live="polite"></div>
-          </div>
-          <div class="col-12">
-            <label class="form-label-custom">Name of the Student <span class="text-danger">*</span></label>
-            <input id="temp_student_name" type="text" class="form-control-custom" placeholder="Type student name in all caps">
-            <div id="error_temp_student_name" class="field-error-msg" aria-live="polite"></div>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label-custom">HEI <span class="text-danger">*</span></label>
-            <input id="temp_hei" type="text" class="form-control-custom" list="temp_hei_list" placeholder="Search HEI">
-            <datalist id="temp_hei_list"></datalist>
-            <div id="error_temp_hei" class="field-error-msg" aria-live="polite"></div>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label-custom">Program <span class="text-danger">*</span></label>
-            <input id="temp_program" type="text" class="form-control-custom" list="temp_program_list" placeholder="Search Program">
-            <datalist id="temp_program_list"></datalist>
-            <div id="error_temp_program" class="field-error-msg" aria-live="polite"></div>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label-custom">Date of Graduation <span class="text-danger">*</span></label>
-            <input id="temp_date_graduation" type="date" class="form-control-custom" autocomplete="off">
-            <div id="error_temp_date_graduation" class="field-error-msg" aria-live="polite"></div>
-          </div>
-        </div>
-        
-        <div id="saveActionError" class="action-error-msg mt-3" aria-live="polite"></div>
+    <div id="addRecordActionError" class="action-error-msg mt-3"></div>
+
+    <div class="d-flex justify-content-end gap-2 mt-4">
+      <button type="button" class="btn btn-secondary" onclick="closeAddRecordModal()">Cancel</button>
+      <button type="button" class="btn btn-primary" onclick="TypingController.addManualBatchStudent()">
+        <i class="bi bi-plus-circle me-1"></i> Add to Batch
+      </button>
+    </div>
+
+    <!-- Batch list inside add modal -->
+    <div class="mt-4 border-top pt-3" id="addModalBatchSection" style="display:none;">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="fw-bold mb-0">Batch Queue</h6>
+        <span class="badge bg-primary" id="addModalBatchCount">0</span>
       </div>
-      
-      <!-- Sidebar/Batch Panel -->
-      <div class="col-lg-5 sidebar-container" id="batchPanel">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-          <h5 class="fw-bold mb-0">Added Students</h5>
-          <span class="badge rounded-pill bg-white text-dark border px-3" id="selectedCountBadge">0 Students</span>
-        </div>
-        <p class="text-muted small mb-3">Edit any batch entry here before saving. The list scrolls independently as it grows.</p>
-        <div class="pe-auto" id="selectedBatchList"></div>
-        
-        <!-- Empty State Placeholder -->
-        <div id="emptyStatePlaceholder" class="empty-state-placeholder">
-          <i class="bi bi-person-plus mb-2 fs-4"></i>
-          <p class="small mb-0">Add students to the batch</p>
-        </div>
-        
-        <div id="updateActionError" class="action-error-msg mt-3" aria-live="polite"></div>
+      <div id="addModalBatchList" style="max-height:180px; overflow-y:auto;"></div>
+      <div class="d-flex justify-content-end mt-3">
+        <button type="button" class="btn btn-success" onclick="TypingController.saveBatch()">
+          <i class="bi bi-save me-1"></i> Save All
+        </button>
       </div>
     </div>
-    
-    <!-- Footer -->
-    <div class="modal-footer-custom">
-      <button class="btn-cancel" onclick="closeEditModal()"><i class="bi bi-x-circle"></i> Cancel</button>
-      <div class="d-flex gap-2">
-        <button type="button" class="btn-save" onclick="addManualBatchStudent()">
-          <i class="bi bi-plus-circle"></i> Add Student
-        </button>
-        <button id="savebtn" class="btn-save" onclick="saveEdit()" disabled><i class="bi bi-save"></i> Save</button>
+  </div>
+</div>
+
+<!-- EDIT MODAL (for existing rows) -->
+<div id="editModal" class="modal">
+  <div class="modal-content" style="max-width:900px; height:auto; max-height:90vh; flex-direction:column; overflow-y:auto;">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div>
+        <h4 class="fw-bold mb-1" id="editModalStudentName">Student Record</h4>
+        <div class="text-muted small" id="editModalStudentMeta"></div>
       </div>
+      <button type="button" class="btn-close" onclick="closeEditModal()"></button>
+    </div>
+
+    <!-- Info strip (read-only from add record fields) -->
+    <div class="row g-2 mb-3 p-3 bg-light rounded" id="editModalInfoStrip">
+      <div class="col-md-3"><span class="small text-muted d-block">Date Received</span><strong id="view_date_received">-</strong></div>
+      <div class="col-md-3"><span class="small text-muted d-block">Target Release</span><strong id="view_target_release">-</strong></div>
+      <div class="col-md-6"><span class="small text-muted d-block">HEI</span><strong id="view_hei">-</strong></div>
+      <div class="col-md-6"><span class="small text-muted d-block">Program</span><strong id="view_program">-</strong></div>
+      <div class="col-md-3"><span class="small text-muted d-block">Transaction</span><strong id="view_transaction">-</strong></div>
+      <div class="col-md-3"><span class="small text-muted d-block">ES II In-charge</span><strong id="view_es2">-</strong></div>
+    </div>
+
+    <!-- Tabs -->
+    <ul class="nav nav-tabs mb-3" id="editModalTabs">
+      <li class="nav-item">
+        <button class="nav-link active" type="button" onclick="TypingController.switchEditTab('general', this)">
+          General Info
+        </button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" type="button" onclick="TypingController.switchEditTab('verification', this)">
+          Verification
+        </button>
+      </li>
+    </ul>
+
+    <!-- General Info Tab -->
+    <div id="editTab_general" class="edit-tab-panel">
+      <div class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">OR No.</label>
+          <input id="edit_or_no" type="text" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">OR: Date Issued</label>
+          <input id="edit_or_date_issued" type="date" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Status of the Application</label>
+          <input id="edit_status_of_application" type="text" class="form-control">
+        </div>
+
+        <div class="col-12 mt-2">
+          <p class="fw-semibold text-muted small mb-2">Course/Evaluation</p>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Date Received</label>
+          <input id="edit_eval_date_received" type="date" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Date Accomplished</label>
+          <input id="edit_eval_date_accomplished" type="date" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Date Forwarded</label>
+          <input id="edit_eval_date_forwarded" type="date" class="form-control">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label fw-semibold">Evaluation Status</label>
+          <input id="edit_evaluation_status" type="text" class="form-control">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label fw-semibold">Application Remarks</label>
+          <input id="edit_application_remarks" type="text" class="form-control">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label fw-semibold">Assigned Person</label>
+          <input id="edit_assigned_person" type="text" class="form-control">
+        </div>
+      </div>
+    </div>
+
+    <!-- Verification Tab -->
+    <div id="editTab_verification" class="edit-tab-panel d-none">
+
+      <!-- View section -->
+      <div class="p-3 bg-light rounded mb-3">
+        <p class="fw-semibold small text-muted mb-2">Course/Evaluation (Read Only)</p>
+        <div class="row g-2">
+          <div class="col-md-4"><span class="small text-muted d-block">Date Received</span><strong id="vview_eval_date_received">-</strong></div>
+          <div class="col-md-4"><span class="small text-muted d-block">Date Accomplished</span><strong id="vview_eval_date_accomplished">-</strong></div>
+          <div class="col-md-4"><span class="small text-muted d-block">Date Forwarded</span><strong id="vview_eval_date_forwarded">-</strong></div>
+          <div class="col-md-4"><span class="small text-muted d-block">Evaluation Status</span><strong id="vview_evaluation_status">-</strong></div>
+          <div class="col-md-4"><span class="small text-muted d-block">Application Remarks</span><strong id="vview_application_remarks">-</strong></div>
+          <div class="col-md-4"><span class="small text-muted d-block">Assigned Person</span><strong id="vview_assigned_person">-</strong></div>
+        </div>
+      </div>
+
+      <!-- Editable verification fields -->
+      <div class="row g-3">
+        <div class="col-12">
+          <p class="fw-semibold small text-muted mb-2">Verification</p>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Date Received</label>
+          <input id="edit_verif_date_received" type="date" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Date Accomplished</label>
+          <input id="edit_verif_date_accomplished" type="date" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Verification Status</label>
+          <input id="edit_verif_status" type="text" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Remarks</label>
+          <input id="edit_verif_remarks" type="text" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Date Forwarded</label>
+          <input id="edit_verif_date_forwarded" type="date" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Issuance Assigned Person</label>
+          <input id="edit_issuance_assigned_person" type="text" class="form-control">
+        </div>
+      </div>
+    </div>
+
+    <div id="editModalActionError" class="action-error-msg mt-3"></div>
+
+    <div class="d-flex justify-content-end gap-2 mt-4 pt-3 border-top">
+      <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+      <button type="button" class="btn btn-primary" onclick="TypingController.saveExistingRecord()">
+        <i class="bi bi-save me-1"></i> Save Changes
+      </button>
     </div>
   </div>
 </div>

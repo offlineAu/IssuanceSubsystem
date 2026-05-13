@@ -430,26 +430,28 @@ var Controller = {
   },
 
   doSearch: function(term) {
-    var targetModule = "issuance";
-    var requestId = this.getCurrentModuleRequestId();
     var token = ++Model.activeSearchToken;
     term = (term || "").trim().toLowerCase();
     Model.lastMainSearchTerm = term;
     Model.isSearchingMain = false;
 
-    var currentYear = Model.currentYear;
-    var yearData = Model.yearDataMap[currentYear] || [];
-    
+    // Always scope to current year's data
+    var currentYearData = Model.yearDataMap[Model.currentYear] || [];
+
     if (!term) {
       Model.searchMode = false;
-      Model.filteredData = Model.applyMainViewFilters(yearData);
+      Model.filteredData = Model.applyMainViewFilters(currentYearData);
       this.renderPage(1);
       return;
     }
 
     Model.searchMode = true;
-    var localMatch = yearData.filter(function(r){
-      return r["Name of the Student"] && r["Name of the Student"].toLowerCase().includes(term);
+    var searchFields = ["Name of the Student", "ID", "HEI", "Program"];
+    var localMatch = currentYearData.filter(function(r) {
+      return searchFields.some(function(field) {
+        var value = r[field] || "";
+        return value.toString().toLowerCase().includes(term);
+      });
     });
     var filteredLocal = Model.applyMainViewFilters(localMatch);
 
@@ -457,23 +459,26 @@ var Controller = {
       Model.filteredData = Model.removeDuplicates(filteredLocal);
       this.renderPage(1);
     } else {
-      // Check if current year has more data to fetch
-      var currentYearProgress = Model.yearBatchProgress[currentYear];
-      var shouldFetchServer = currentYearProgress && currentYearProgress.hasMore;
-      
-      if (!shouldFetchServer) {
-        View.renderEmpty("No records found in " + currentYear);
-        return;
-      }
-
       Model.isSearchingMain = true;
       View.showMainSearchLoading();
-      
-      // Load more data for the current year and then search
-      Controller.loadNextBatchForYear(currentYear, function() {
+      Service.searchExactName(term, function(res) {
+        if (token !== Model.activeSearchToken) return;
         Model.isSearchingMain = false;
-        // Re-run search with newly loaded data
-        Controller.doSearch(term);
+        if (res && res.length) {
+          // Also scope remote results to current year
+          var yearFiltered = res.filter(function(r) {
+            return String(r["Year"] || new Date(r["Date Received"] || "").getFullYear()) === String(Model.currentYear);
+          });
+          var filteredRemote = Model.applyMainViewFilters(yearFiltered.length ? yearFiltered : res);
+          if (!filteredRemote.length) {
+            View.renderEmpty("No records found");
+            return;
+          }
+          Model.filteredData = Model.removeDuplicates(filteredRemote);
+          TypingController.renderPage(1);
+        } else {
+          View.renderEmpty("No records found");
+        }
       });
     }
   },
@@ -2041,9 +2046,13 @@ var Controller = {
   },
 
   switchToYear: function(year) {
+    // Clear search input when switching years
+    var searchInput = document.getElementById("searchInput");
+    if (searchInput) searchInput.value = "";
+    Model.lastMainSearchTerm = "";
+    Model.searchMode = false;
+
     var yearTabsContainer = document.getElementById("yearTabsContainer");
-    
-    // Update active state in UI
     if (yearTabsContainer) {
       yearTabsContainer.querySelectorAll(".nav-link").forEach(function(link) {
         link.classList.remove("active");
@@ -2052,14 +2061,12 @@ var Controller = {
         }
       });
     }
-    
-    // Update model
+
     Model.currentYear = year;
-    
-    // If year data is loaded, show it
+
     if (Model.yearLoadState[year] === 'loaded' && Model.yearDataMap[year]) {
       Model.filteredData = Model.applyMainViewFilters(Model.yearDataMap[year]);
-      Controller.renderPage(1);
+      TypingController.renderPage(1);
     }
   },
 

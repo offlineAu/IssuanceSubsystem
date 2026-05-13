@@ -33,6 +33,7 @@ var TypingController = {
     this.loadNavbarLogo();
     this.loadAccountName();
     this.loadUserRole();
+    this.loadRefData();
     this.setActiveMainView("home");
     this.initData();
     this.startDatabaseRowPolling();
@@ -40,48 +41,37 @@ var TypingController = {
 
   initData: function(options) {
     var settings = options || {};
-    console.log("[TypingController] initData started");
     if (!settings.silent) View.showOverlay(true);
-    
-    // Step 1: Get available years from server
-    console.log("[TypingController] Calling Service.getYearsSummary...");
+
     Service.getYearsSummary(function(yearSummary) {
-      console.log("[TypingController] getYearsSummary response:", yearSummary);
-      if (!yearSummary || !yearSummary.summaries || yearSummary.summaries.length === 0) {
-        // No data available
-        console.log("[TypingController] No years data available");
+      if (!yearSummary || !yearSummary.summaries || !yearSummary.summaries.length) {
         Model.availableYears = [];
         Model.yearDataMap = {};
         Model.filteredData = [];
-        Controller.renderYearTabs();
+        TypingController.renderYearTabs();
         if (!settings.silent) View.showOverlay(false);
         return;
       }
-      
-      // Store available years
+
       Model.availableYears = yearSummary.summaries.map(function(s) { return String(s.year); });
       Model.yearLoadState = {};
       yearSummary.summaries.forEach(function(s) {
         Model.yearLoadState[s.year] = 'unloaded';
         Model.yearDataMap[s.year] = [];
       });
-      
-      // Render year tabs immediately (no "All Years", just specific years)
-      Controller.renderYearTabs();
-      
-      // Step 2: Load the 2 latest years fully
-      var latestYears = yearSummary.summaries.slice(0, 2); // Take first 2 (sorted desc)
-      
+
+      TypingController.renderYearTabs();
+
+      var latestYears = yearSummary.summaries.slice(0, 2);
+
       if (latestYears.length > 0) {
-        var firstYear = latestYears[0].year;
-        Model.currentYear = String(firstYear);
-        
-        // Load first latest year
-        Controller.loadYearData(String(firstYear), function() {
-          // After first year loaded, load second year if exists
+        var firstYear = String(latestYears[0].year);
+        Model.currentYear = firstYear;
+
+        TypingController.loadYearData(firstYear, function() {
           if (latestYears.length > 1) {
-            var secondYear = latestYears[1].year;
-            Controller.loadYearData(String(secondYear), function() {
+            var secondYear = String(latestYears[1].year);
+            TypingController.loadYearData(secondYear, function() {
               if (!settings.silent) View.showOverlay(false);
             });
           } else {
@@ -97,53 +87,84 @@ var TypingController = {
   loadYearData: function(year, onComplete) {
     console.log("[TypingController] loadYearData called for year:", year);
     if (Model.yearLoadState[year] === 'loading' || Model.yearLoadState[year] === 'loaded') {
-      console.log("[TypingController] Year already loading/loaded, skipping");
       if (onComplete) onComplete();
       return;
     }
-    
+
     Model.yearLoadState[year] = 'loading';
     Model.loadingYears.push(year);
-    Controller.renderYearTabs(); // Show loading state
-    
-    var batchSize = Model.initialBatchSize || 1000;
-    console.log("[TypingController] Calling Service.getDataByYear for year:", year);
-    Service.getDataByYear(year, batchSize, function(res) {
-      console.log("[TypingController] getDataByYear response for year", year, ":", res);
-      if (res && res.success) {
-        Model.yearDataMap[year] = res.data || [];
-        Model.yearLoadState[year] = 'loaded';
-        Model.loadedYears.push(year);
-        
-        // Update batch progress for this year
-        Model.yearBatchProgress[year] = {
-          nextStartRow: res.nextStartRow || 2,
-          hasMore: res.hasMore || false,
-          total: res.total || 0
-        };
-        
-        // If this is the current year, render it
-        if (Model.currentYear === year) {
-          console.log("[TypingController] Rendering current year:", year);
-          Model.filteredData = Model.applyMainViewFilters(Model.yearDataMap[year]);
-          Controller.renderPage(1);
+    TypingController.renderYearTabs();
+
+    var allRecords = [];
+    var batchSize = 5000;
+
+    function syncFullData() {
+      var byRow = {};
+      Model.availableYears.forEach(function(y) {
+        var rows = Model.yearDataMap[y] || [];
+        rows.forEach(function(row) {
+          if (row && row._row) byRow[String(row._row)] = row;
+        });
+      });
+      Model.fullData = Object.keys(byRow).map(function(k) {
+        return byRow[k];
+      }).sort(function(a, b) { return Number(a._row) - Number(b._row); });
+    }
+
+    function fetchBatch(nextScanFrom) {
+      console.log("[TypingController] getDataByYear year:", year, "scanFrom:", nextScanFrom);
+      Service.getDataByYear(year, batchSize, nextScanFrom, function(res) {
+        if (!res || !res.success) {
+          finalize(allRecords);
+          return;
         }
-      } else {
-        console.error("[TypingController] getDataByYear failed or returned no success for year", year);
-      }
-      
-      // Remove from loading list
+
+        allRecords = allRecords.concat(res.data || []);
+        Model.yearDataMap[year] = allRecords;
+        syncFullData();
+        TypingController.renderYearTabs();
+
+        if (Model.currentYear === String(year)) {
+          Model.filteredData = Model.applyMainViewFilters(allRecords);
+          TypingController.renderPage(1);
+        }
+
+        if (res.hasMore && res.nextScanFrom && res.nextScanFrom > 0) {
+          fetchBatch(res.nextScanFrom);
+        } else {
+          finalize(allRecords);
+        }
+      });
+    }
+
+    function finalize(records) {
+      Model.yearDataMap[year] = records;
+      syncFullData();
+      Model.yearLoadState[year] = 'loaded';
+      Model.yearBatchProgress[year] = { hasMore: false, nextScanFrom: 0, total: records.length };
+      console.log("[TypingController] Finished year", year, "total:", records.length);
+
       Model.loadingYears = Model.loadingYears.filter(function(y) { return y !== year; });
-      Controller.renderYearTabs(); // Update to show loaded state
-      
+      TypingController.renderYearTabs();
+
+      if (Model.currentYear === String(year)) {
+        Model.filteredData = Model.applyMainViewFilters(records);
+        TypingController.renderPage(1);
+      }
+
       if (onComplete) onComplete();
-    });
+    }
+
+    fetchBatch(undefined);
+  },
+  updateYearTabCounts: function() {
+    // This would fetch summary counts for remaining years
+    // For now, we rely on the initial summary data
   },
 
-  loadNextBatchForYear: function(year, onComplete) {
+  loadNextBatchForYear: function(year) {
     var progress = Model.yearBatchProgress[year];
     if (!progress || !progress.hasMore || Model.yearLoadState[year] !== 'loaded') {
-      if (onComplete) onComplete();
       return;
     }
     
@@ -163,8 +184,35 @@ var TypingController = {
           Controller.renderPage(Model.currentPage);
         }
       }
-      if (onComplete) onComplete();
     });
+  },
+
+  loadNextBatch: function(startRow) {
+    var targetModule = "typing";
+    var requestId = this.getCurrentModuleRequestId();
+    if (!Model.loadingBatches || startRow > (Model.totalRows + 1)) return;
+    Service.loadRemainingData(startRow, Model.nextBatchSize, this.guardModuleCallback(targetModule, requestId, function(res){
+      if (res.data && res.data.length) {
+        var existingRows = {};
+        Model.fullData.forEach(function(f){ existingRows[String(f._row)] = true; });
+        var newRows = res.data.filter(function(r){ return !existingRows[String(r._row)]; });
+        Model.fullData = Model.fullData.concat(newRows);
+
+        if (!Model.searchMode) {
+          Model.filteredData = Model.applyMainViewFilters(Model.fullData);
+          Controller.renderPage(Model.currentPage);
+        }
+
+        Model.recomputeBatchSoPreviews();
+        View.renderSelectedBatchList();
+        View.renderReportAnalytics();
+
+        Model.nextBatchStart += Model.nextBatchSize;
+        Controller.loadNextBatch(Model.nextBatchStart);
+      } else {
+        Model.loadingBatches = false;
+      }
+    }));
   },
 
   renderPage: function(page) {
@@ -174,6 +222,16 @@ var TypingController = {
     if (safePage > totalPages) safePage = totalPages;
     Model.currentPage = safePage;
     View.renderPage(safePage);
+  },
+
+  goToPage: function(page) {
+    this.renderPage(page);
+  },
+
+  findLoadedStudentByRow: function(rowID) {
+    var key = String(rowID || "");
+    return (Model.filteredData || []).find(function(s) { return String(s._row) === key; }) ||
+      (Model.fullData || []).find(function(s) { return String(s._row) === key; });
   },
 
   debounce: function(fn, wait) {
@@ -186,24 +244,38 @@ var TypingController = {
     };
   },
 
+  loadRefData: function() {
+    Service.getRefSheetData(function(data) {
+      Model.refData = data || { programs: [], heis: [], programMap: {}, heiMap: {} };
+      // Populate datalists
+      View.populateDatalistOptions("temp_program_list",
+        Model.refData.programs.map(function(p) { return p.program; })
+      );
+      View.populateDatalistOptions("temp_hei_list",
+        Model.refData.heis.map(function(h) { return h.hei; })
+      );
+    });
+  },
+
   doSearch: function(term) {
     var token = ++Model.activeSearchToken;
     term = (term || "").trim().toLowerCase();
     Model.lastMainSearchTerm = term;
     Model.isSearchingMain = false;
 
+    // Always scope to current year's data
+    var currentYearData = Model.yearDataMap[Model.currentYear] || [];
+
     if (!term) {
       Model.searchMode = false;
-      var yearFiltered = Controller.applyYearFilter(Model.fullData);
-      Model.filteredData = Model.applyMainViewFilters(yearFiltered);
+      Model.filteredData = Model.applyMainViewFilters(currentYearData);
       this.renderPage(1);
       return;
     }
 
     Model.searchMode = true;
     var searchFields = ["Name of the Student", "ID", "HEI", "Program"];
-    var yearFiltered = Controller.applyYearFilter(Model.fullData);
-    var localMatch = yearFiltered.filter(function(r){
+    var localMatch = currentYearData.filter(function(r) {
       return searchFields.some(function(field) {
         var value = r[field] || "";
         return value.toString().toLowerCase().includes(term);
@@ -217,11 +289,15 @@ var TypingController = {
     } else {
       Model.isSearchingMain = true;
       View.showMainSearchLoading();
-      Service.searchExactName(term, function(res){
+      Service.searchExactName(term, function(res) {
         if (token !== Model.activeSearchToken) return;
         Model.isSearchingMain = false;
         if (res && res.length) {
-          var filteredRemote = Model.applyMainViewFilters(res);
+          // Also scope remote results to current year
+          var yearFiltered = res.filter(function(r) {
+            return String(r["Year"] || new Date(r["Date Received"] || "").getFullYear()) === String(Model.currentYear);
+          });
+          var filteredRemote = Model.applyMainViewFilters(yearFiltered.length ? yearFiltered : res);
           if (!filteredRemote.length) {
             View.renderEmpty("No records found");
             return;
@@ -240,9 +316,227 @@ var TypingController = {
       dateReceived: this.normalizeIsoDateInput((document.getElementById("temp_date_received") || {}).value || ""),
       studentName: (document.getElementById("temp_student_name") || {}).value || "",
       hei: (document.getElementById("temp_hei") || {}).value || "",
+      heiAddress: (document.getElementById("temp_hei_address") || {}).value || "",
       dateGraduation: this.normalizeIsoDateInput((document.getElementById("temp_date_graduation") || {}).value || ""),
-      program: (document.getElementById("temp_program") || {}).value || ""
+      program: (document.getElementById("temp_program") || {}).value || "",
+      es2InCharge: (document.getElementById("temp_es2_incharge") || {}).value || "",
+      targetReleaseDate: (document.getElementById("temp_target_release_date") || {}).value || ""
     };
+  },
+
+  openEditModal: function(student) {
+    if (!student) return;
+    
+    // Debug: log the student object to confirm field names
+    console.log("[openEditModal] student fields:", Object.keys(student));
+    console.log("[openEditModal] student data:", student);
+    
+    Model.setEditingRow(student._row);
+
+    var setText = function(id, val) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = (val !== undefined && val !== null && val !== "") ? val : "-";
+    };
+
+    var setVal = function(id, val) {
+      var el = document.getElementById(id);
+      if (el) el.value = (val !== undefined && val !== null) ? val : "";
+    };
+
+    // Info strip
+    setText("editModalStudentName", student["Name of the Student"]);
+    setText("editModalStudentMeta", "Row: " + student._row + " | ID: " + (student["ID"] || "-"));
+    setText("view_date_received", student["Date Received"]);
+    setText("view_target_release", student["Target Release Date"]);
+    setText("view_hei", student["HEI"]);
+    setText("view_program", student["Program"]);
+    setText("view_transaction", student["Transaction Type"]);
+    setText("view_es2", student["ES II In-charge of the Program"]);
+
+    // General Info tab
+    setVal("edit_or_no", student["OR No."]);
+    setVal("edit_or_date_issued", student["OR: Date Issued"]);
+    setVal("edit_status_of_application", student["Status of the Application"]);
+    setVal("edit_eval_date_received", student["Status of Course/Evaluation: Date Received"]);
+    setVal("edit_eval_date_accomplished", student["Status of Course/Evaluation: Date Accomplished"]);
+    setVal("edit_eval_date_forwarded", student["Status of Course/Evaluation: Date Forwarded"]);
+    setVal("edit_evaluation_status", student["Evaluation Status"]);
+    setVal("edit_application_remarks", student["Application Remarks"]);
+    setVal("edit_assigned_person", student["Assigned Person"]);
+
+    // Verification tab - read-only mirror
+    setText("vview_eval_date_received", student["Status of Course/Evaluation: Date Received"]);
+    setText("vview_eval_date_accomplished", student["Status of Course/Evaluation: Date Accomplished"]);
+    setText("vview_eval_date_forwarded", student["Status of Course/Evaluation: Date Forwarded"]);
+    setText("vview_evaluation_status", student["Evaluation Status"]);
+    setText("vview_application_remarks", student["Application Remarks"]);
+    setText("vview_assigned_person", student["Assigned Person"]);
+
+    // Verification tab - editable
+    setVal("edit_verif_date_received", student["Verification: Date Received"]);
+    setVal("edit_verif_date_accomplished", student["Verification: Date Accomplished"]);
+    setVal("edit_verif_status", student["Verification Status"]);
+    setVal("edit_verif_remarks", student["Verification: Remarks"]);
+    setVal("edit_verif_date_forwarded", student["Verification: Date Forwarded"]);
+    setVal("edit_issuance_assigned_person", student["Issuance and Encoding of No.: Assigned Person"]);
+
+    // Default to General tab
+    this.switchEditTab("general", document.querySelector("#editModalTabs .nav-link"));
+
+    var modal = document.getElementById("editModal");
+    if (modal) modal.classList.add("show");
+  },
+
+  switchEditTab: function(tab, btn) {
+    // Hide all panels
+    document.querySelectorAll(".edit-tab-panel").forEach(function(p) {
+      p.classList.add("d-none");
+    });
+    // Deactivate all tab buttons
+    document.querySelectorAll("#editModalTabs .nav-link").forEach(function(b) {
+      b.classList.remove("active");
+    });
+    // Show selected panel and activate button
+    var panel = document.getElementById("editTab_" + tab);
+    if (panel) panel.classList.remove("d-none");
+    if (btn) btn.classList.add("active");
+  },
+
+  saveExistingRecord: function() {
+    var rowID = Model.editingRowID;
+    if (!rowID) return;
+
+    var getVal = function(id) {
+      var el = document.getElementById(id);
+      return el ? el.value.trim() : "";
+    };
+
+    var payload = {
+      row: rowID,
+      orNo: getVal("edit_or_no"),
+      orDateIssued: getVal("edit_or_date_issued"),
+      statusOfApplication: getVal("edit_status_of_application"),
+      evalDateReceived: getVal("edit_eval_date_received"),
+      evalDateAccomplished: getVal("edit_eval_date_accomplished"),
+      evalDateForwarded: getVal("edit_eval_date_forwarded"),
+      evaluationStatus: getVal("edit_evaluation_status"),
+      applicationRemarks: getVal("edit_application_remarks"),
+      assignedPerson: getVal("edit_assigned_person"),
+      verifDateReceived: getVal("edit_verif_date_received"),
+      verifDateAccomplished: getVal("edit_verif_date_accomplished"),
+      verifStatus: getVal("edit_verif_status"),
+      verifRemarks: getVal("edit_verif_remarks"),
+      verifDateForwarded: getVal("edit_verif_date_forwarded"),
+      issuanceAssignedPerson: getVal("edit_issuance_assigned_person")
+    };
+
+    View.showSaveIndicator("Saving...", "info", 0);
+
+    Service.saveExistingRecord(payload, function(result) {
+      if (result && result.ok) {
+        View.showSaveIndicator("Saved successfully", "success", 3000);
+        View.closeEditModal();
+        // Update the row in local data
+        var student = Model.fullData.find(function(s) {
+          return String(s._row) === String(rowID);
+        });
+        if (student) {
+          student["OR No."] = payload.orNo;
+          student["OR: Date Issued"] = payload.orDateIssued;
+          student["Status of the Application"] = payload.statusOfApplication;
+          student["Status of Course/Evaluation: Date Received"] = payload.evalDateReceived;
+          student["Status of Course/Evaluation: Date Accomplished"] = payload.evalDateAccomplished;
+          student["Status of Course/Evaluation: Date Forwarded"] = payload.evalDateForwarded;
+          student["Evaluation Status"] = payload.evaluationStatus;
+          student["Application Remarks"] = payload.applicationRemarks;
+          student["Assigned Person"] = payload.assignedPerson;
+          student["Verification: Date Received"] = payload.verifDateReceived;
+          student["Verification: Date Accomplished"] = payload.verifDateAccomplished;
+          student["Verification Status"] = payload.verifStatus;
+          student["Verification: Remarks"] = payload.verifRemarks;
+          student["Verification: Date Forwarded"] = payload.verifDateForwarded;
+          student["Issuance and Encoding of No.: Assigned Person"] = payload.issuanceAssignedPerson;
+        }
+        Model.filteredData = Model.applyMainViewFilters(Model.yearDataMap[Model.currentYear] || []);
+        TypingController.renderPage(Model.currentPage);
+      } else {
+        View.showSaveIndicator((result && result.message) || "Save failed.", "error", 5000);
+      }
+    }, function(err) {
+      View.showSaveIndicator("Save failed: " + (err && err.message || "Unknown error"), "error", 5000);
+    });
+  },
+
+  openManualBatchModal: function() {
+    Model.clearEditing();
+    View.clearModalValidationErrors();
+    // Reset all add record fields
+    ["temp_date_received","temp_target_release_date","temp_student_name",
+    "temp_transaction_type","temp_hei","temp_hei_address",
+    "temp_date_graduation","temp_program","temp_es2_incharge"].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.value = "";
+    });
+    View.renderSelectedBatchList();
+    View.updateActionButtons();
+    this.renderAddModalBatchList();
+    var modal = document.getElementById("addRecordModal");
+    if (modal) modal.classList.add("show");
+  },
+
+  renderAddModalBatchList: function() {
+    var section = document.getElementById("addModalBatchSection");
+    var list = document.getElementById("addModalBatchList");
+    var count = document.getElementById("addModalBatchCount");
+    if (!section || !list) return;
+
+    var students = Model.batchStudents;
+    if (count) count.textContent = students.length;
+    section.style.display = students.length ? "" : "none";
+
+    list.innerHTML = students.map(function(entry, idx) {
+      return "<div class='d-flex justify-content-between align-items-center border rounded p-2 mb-1'>" +
+        "<div><strong>" + (entry.fields.studentName || "Student " + (idx+1)) + "</strong>" +
+        "<div class='text-muted small'>" + (entry.fields.hei || "") + " | " + (entry.fields.program || "") + "</div></div>" +
+        "<button type='button' class='btn btn-sm btn-outline-danger' onclick=\"TypingController.removeBatchStudent('" + entry._row + "')\">" +
+        "<i class='bi bi-trash'></i></button>" +
+        "</div>";
+    }).join("");
+  },
+
+  saveBatch: function() {
+    if (!Model.batchStudents.length) return;
+
+    var payloads = Model.batchStudents.map(function(entry) {
+      return {
+        dateReceived: entry.fields.dateReceived || "",
+        studentName: entry.fields.studentName || "",
+        hei: entry.fields.hei || "",
+        heiAddress: entry.fields.heiAddress || "",
+        dateGraduation: entry.fields.dateGraduation || "",
+        program: entry.fields.program || "",
+        es2InCharge: entry.fields.es2InCharge || "",
+        targetReleaseDate: entry.fields.targetReleaseDate || "",
+        transactionType: entry.fields.transactionType || ""
+      };
+    });
+
+    View.showSaveIndicator("Saving batch...", "info", 0);
+
+    Service.updateTempRecordEntries(payloads, "batch-" + Date.now(), function(result) {
+      var successCount = (result && result.results ? result.results.filter(function(r){ return r.ok; }).length : 0);
+      if (successCount === payloads.length) {
+        View.showSaveIndicator("Batch saved successfully", "success", 3000);
+        var modal = document.getElementById("addRecordModal");
+        if (modal) modal.classList.remove("show");
+        Model.batchStudents = [];
+        TypingController.initData({ silent: true });
+      } else {
+        View.showSaveIndicator("Saved " + successCount + " of " + payloads.length, "error", 5000);
+      }
+    }, function(err) {
+      View.showSaveIndicator("Batch save failed", "error", 5000);
+    });
   },
 
   normalizeNameInput: function(value) {
@@ -352,30 +646,26 @@ var TypingController = {
     View.clearModalActionError("updateStudentBtn");
 
     var patch = this.getFormPatch();
+
+    // Auto-fill from ref data FIRST, before refreshDerivedFields overwrites
+    if (changedField === "program" && patch.program) {
+      var es2 = (Model.refData.programMap || {})[patch.program] || "";
+      patch.es2InCharge = es2;
+      View.setValue("temp_es2_incharge", es2);
+    }
+    if (changedField === "hei" && patch.hei) {
+      var address = (Model.refData.heiMap || {})[patch.hei] || "";
+      patch.heiAddress = address;
+      View.setValue("temp_hei_address", address);
+    }
+
     Model.updateBatchEntryFields(entry._row, patch);
     this.refreshDerivedFields(entry);
-    
     Model.recomputeBatchSoPreviews();
     Model.batchHasChanges = Model.isBatchDirty();
     View.renderSelectedBatchList();
     View.updateActionButtons();
     this.loadTempPrefillForEntry(entry, true);
-  },
-
-  openManualBatchModal: function() {
-    Model.clearEditing();
-    View.clearModalValidationErrors();
-    View.setSaveButtonLoading(false);
-    View.populateStaticSelectOptions();
-    View.setValue("temp_date_received", "");
-    View.setValue("temp_student_name", "");
-    View.setValue("temp_hei", "");
-    View.setValue("temp_date_graduation", "");
-    View.setValue("temp_program", "");
-    View.renderSelectedBatchList();
-    View.updateActionButtons();
-    var modal = document.getElementById("editModal");
-    if (modal) modal.classList.add("show");
   },
 
   addManualBatchStudent: function() {
@@ -483,15 +773,70 @@ var TypingController = {
   },
 
   loadNavbarLogo: function() {
+    var shell = document.getElementById("navbarLogoShell");
+    var logoImage = document.getElementById("navbarLogoImage");
+    var fallback = document.getElementById("navbarLogoFallback");
+    var loading = document.getElementById("navbarLogoLoading");
+
+    if (shell) {
+      shell.classList.add("is-loading");
+      shell.classList.remove("is-ready");
+    }
+    if (loading) loading.classList.remove("d-none");
+    if (fallback) fallback.classList.remove("d-none");
+
     Service.getNavbarLogoData(function(result) {
       var dataUrl = result && result.dataUrl ? String(result.dataUrl).trim() : "";
-      var logoImage = document.getElementById("navbarLogoImage");
-      var fallback = document.getElementById("navbarLogoFallback");
-      if (logoImage && dataUrl) {
-        logoImage.src = dataUrl;
-        logoImage.classList.remove("d-none");
-        if (fallback) fallback.classList.add("d-none");
+
+      if (!dataUrl) {
+        if (shell) shell.classList.remove("is-loading");
+        if (loading) loading.classList.add("d-none");
+        if (logoImage) {
+          logoImage.onload = null;
+          logoImage.onerror = null;
+          logoImage.removeAttribute("src");
+          logoImage.classList.add("d-none");
+        }
+        if (fallback) fallback.classList.remove("d-none");
+        return;
       }
+
+      if (!logoImage) {
+        if (shell) shell.classList.remove("is-loading");
+        if (loading) loading.classList.add("d-none");
+        return;
+      }
+
+      logoImage.onload = function() {
+        if (shell) {
+          shell.classList.remove("is-loading");
+          shell.classList.add("is-ready");
+        }
+        if (loading) loading.classList.add("d-none");
+        if (fallback) fallback.classList.add("d-none");
+        logoImage.classList.remove("d-none");
+      };
+
+      logoImage.onerror = function() {
+        if (shell) shell.classList.remove("is-loading");
+        if (loading) loading.classList.add("d-none");
+        logoImage.removeAttribute("src");
+        logoImage.classList.add("d-none");
+        if (fallback) fallback.classList.remove("d-none");
+      };
+
+      logoImage.src = dataUrl;
+      logoImage.classList.remove("d-none");
+    }, function() {
+      if (shell) shell.classList.remove("is-loading");
+      if (logoImage) {
+        logoImage.onload = null;
+        logoImage.onerror = null;
+        logoImage.removeAttribute("src");
+        logoImage.classList.add("d-none");
+      }
+      if (loading) loading.classList.add("d-none");
+      if (fallback) fallback.classList.remove("d-none");
     });
   },
 
@@ -571,6 +916,32 @@ var TypingController = {
       }
     });
 
+    var heiInput = document.getElementById("temp_hei");
+    if (heiInput) {
+      heiInput.addEventListener("change", function() {
+        TypingController.syncCurrentFormToModel("hei");
+      });
+    }
+
+    var programInput = document.getElementById("temp_program");
+    if (programInput) {
+      programInput.addEventListener("change", function() {
+        TypingController.syncCurrentFormToModel("program");
+      });
+    }
+
+    var dateReceivedInput = document.getElementById("temp_date_received");
+    if (dateReceivedInput) {
+      dateReceivedInput.addEventListener("change", function() {
+        var val = dateReceivedInput.value;
+        if (val) {
+          var target = document.getElementById("temp_target_release_date");
+          if (target) target.value = TypingController.addDaysToIso(val, 7);
+        }
+        TypingController.syncCurrentFormToModel("dateReceived");
+      });
+    }
+
     // Filter builder events
     var addFilterBtnMain = document.getElementById("addFilterBtnMain");
     var filterPopoverMain = document.getElementById("filterPopoverMain");
@@ -612,6 +983,20 @@ var TypingController = {
     });
 
     this.refreshFilterUI();
+
+    var resultsTable = document.getElementById("typingSearchResults");
+
+    if (resultsTable) {
+      resultsTable.addEventListener("click", function(e) {
+        var tr = e.target.closest("tr[data-row]");
+        if (!tr) return;
+        var student = Model.fullData.find(function(s) {
+          return String(s._row) === String(tr.dataset.row);
+        });
+        if (student) TypingController.openEditModal(student);
+        // REMOVE everything after this line (the manual batch logic)
+      });
+    }
   },
 
   setVerificationFilter: function(mode, scope) {
@@ -685,77 +1070,73 @@ var TypingController = {
       var btn = e.target.closest("button[data-year]");
       if (!btn) return;
 
-      // Update active state
+      var year = btn.getAttribute("data-year");
+      var loadState = Model.yearLoadState[year];
+
+      if (loadState === 'unloaded') {
+        TypingController.loadYearData(year, function() {
+          TypingController.switchToYear(year);
+        });
+        return;
+      }
+
+      TypingController.switchToYear(year);
+    });
+  },
+
+  switchToYear: function(year) {
+    // Clear search input when switching years
+    var searchInput = document.getElementById("searchInput");
+    if (searchInput) searchInput.value = "";
+    Model.lastMainSearchTerm = "";
+    Model.searchMode = false;
+
+    var yearTabsContainer = document.getElementById("yearTabsContainer");
+    if (yearTabsContainer) {
       yearTabsContainer.querySelectorAll(".nav-link").forEach(function(link) {
         link.classList.remove("active");
-      });
-      btn.classList.add("active");
-
-      // Apply year filter
-      var year = btn.getAttribute("data-year");
-      Controller.setYearFilter(year);
-    });
-  },
-
-  setYearFilter: function(year) {
-    Model.yearFilter = year || "all";
-    this.doSearch(Model.lastMainSearchTerm || "");
-  },
-
-  extractYearsFromData: function(data) {
-    var years = new Set();
-    var currentYear = new Date().getFullYear();
-
-    (data || []).forEach(function(row) {
-      var dateReceived = row["Date Received"] || "";
-      if (dateReceived) {
-        var year = new Date(dateReceived).getFullYear();
-        if (!isNaN(year)) {
-          years.add(year);
+        if (link.getAttribute("data-year") === year) {
+          link.classList.add("active");
         }
-      }
-    });
+      });
+    }
 
-    // Convert to array and sort descending
-    var sortedYears = Array.from(years).sort(function(a, b) { return b - a; });
+    Model.currentYear = year;
 
-    // Filter: show current year + 3 previous, rest go to archive
-    var displayYears = [];
-    var archiveYears = [];
-
-    sortedYears.forEach(function(year) {
-      if (year >= currentYear - 2) {
-        displayYears.push(year);
-      } else {
-        archiveYears.push(year);
-      }
-    });
-
-    return {
-      display: displayYears,
-      archive: archiveYears
-    };
+    if (Model.yearLoadState[year] === 'loaded' && Model.yearDataMap[year]) {
+      Model.filteredData = Model.applyMainViewFilters(Model.yearDataMap[year]);
+      TypingController.renderPage(1);
+    }
   },
 
   renderYearTabs: function() {
     var container = document.getElementById("yearTabsContainer");
     if (!container) return;
 
-    var years = this.extractYearsFromData(Model.fullData);
-    var currentFilter = Model.yearFilter || "all";
+    var availableYears = Model.availableYears || [];
+    var currentYear = Model.currentYear || (availableYears.length > 0 ? availableYears[0] : null);
 
-    // Build HTML
-    var html = '<li><button class="nav-link ' + (currentFilter === "all" ? "active" : "") + '" data-year="all">All Years</button></li>';
-
-    // Add display years
-    years.display.forEach(function(year) {
-      html += '<li><button class="nav-link ' + (currentFilter === String(year) ? "active" : "") + '" data-year="' + year + '">' + year + '</button></li>';
-    });
-
-    // Add archive tab if there are archive years
-    if (years.archive.length > 0) {
-      html += '<li><button class="nav-link ' + (currentFilter === "archive" ? "active" : "") + '" data-year="archive">Archive</button></li>';
+    if (availableYears.length === 0) {
+      container.innerHTML = '';
+      return;
     }
+
+    var html = '';
+    availableYears.forEach(function(year) {
+      var isActive = (year === currentYear);
+      var isLoading = Model.loadingYears.indexOf(year) !== -1;
+      var isLoaded = Model.yearLoadState[year] === 'loaded';
+      var loadState = isLoading ? 'loading' : (isLoaded ? 'loaded' : 'unloaded');
+
+      var count = '';
+      if (isLoaded && Model.yearDataMap[year]) {
+        count = '<span class="badge-year-count">' + Model.yearDataMap[year].length + '</span>';
+      } else if (isLoading) {
+        count = '<span class="spinner-border spinner-border-sm ms-2" role="status"></span>';
+      }
+
+      html += '<li><button class="nav-link ' + (isActive ? 'active' : '') + ' ' + loadState + '" data-year="' + year + '" data-load-state="' + loadState + '">' + year + count + '</button></li>';
+    });
 
     container.innerHTML = html;
   },

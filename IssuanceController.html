@@ -247,6 +247,8 @@ var Controller = {
       } else {
         View.showOverlay(false);
       }
+
+      Service.refreshCacheInBackground("issuance");
     }));
   },
 

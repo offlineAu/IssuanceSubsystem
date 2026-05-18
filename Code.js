@@ -35,6 +35,12 @@ const DASHBOARD_SECTION_CACHE_TTL_SECONDS = 600; // 10 minutes
 const BIGQUERY_CACHE_VERSION = "v2";
 const DASHBOARD_DEBUG = false;
 
+// ── Per-user data cache (works for ALL positions, not just developer) ─────────
+var USER_CACHE_KEY_PREFIX    = "user:db:";
+var USER_CACHE_TTL_MS        = 10 * 60 * 1000; // 10 minutes
+var USER_CACHE_TIMESTAMP_KEY = "user:db:ts:";
+
+
 const DASHBOARD_STATUS_ORDER = [
   "For Evaluation",
   "Evaluated",
@@ -1052,15 +1058,101 @@ function getTypingRecordViewConfig_() {
   };
 }
 
+function getDeveloperRecordViewConfig_() {
+  var ss = SpreadsheetApp.openById(spreadsheetID);
+  var sheet = ss.getSheetByName(databaseSheetName);
+  if (!sheet || sheet.getLastColumn() < 1) {
+    return getIssuanceRecordViewConfig_();
+  }
+
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn())
+    .getValues()[0]
+    .map(function(h) { return String(h || "").trim(); })
+    .filter(function(h) { return h !== ""; });
+
+  var tableColumns = headers.map(function(name) {
+    return {
+      name: name,
+      label: name === "Name of the Student" ? "Name" : name,
+      isIdentity: identityColumnsToShow.indexOf(name) !== -1,
+      operations: { create: true, read: true, update: true, "delete": true }
+    };
+  });
+
+  return {
+    mode: "developer",
+    supportsIssuanceEditor: true,
+    showVerificationFilters: true,
+    dataColumns: headers,
+    tableColumns: tableColumns,
+    modalFields: issuanceFieldKeys.map(function(fieldKey) {
+      var config = issuanceFieldConfig[fieldKey];
+      return {
+        key: fieldKey,
+        name: config.columnName,
+        label: config.label,
+        operations: { create: true, read: true, update: true, "delete": false },
+        isIdentity: false
+      };
+    })
+  };
+}
+
+function getIssuanceRecordViewConfig_() {
+  return {
+    mode: "issuance",
+    supportsIssuanceEditor: true,
+    showVerificationFilters: true,
+    dataColumns: columnsToShow.slice(),
+    tableColumns: developerTableColumns.map(function(name) {
+      return {
+        name: name,
+        label: name === "Name of the Student" ? "Name" : (name === "Issuance and Encoding of No.: Assigned Person" ? "Assigned Person" : name),
+        isIdentity: identityColumnsToShow.indexOf(name) !== -1,
+        operations: { create: false, read: true, update: true, "delete": false }
+      };
+    }),
+    modalFields: issuanceFieldKeys.map(function(fieldKey) {
+      var config = issuanceFieldConfig[fieldKey];
+      return {
+        key: fieldKey,
+        name: config.columnName,
+        label: config.label,
+        operations: { create: true, read: true, update: true, "delete": false },
+        isIdentity: false
+      };
+    })
+  };
+}
+
 function getCurrentRecordViewConfig_() {
-  const userContext = getCurrentUserContext_();
-  const normalizedPosition = String(userContext.position || "").trim().toLowerCase();
-  if (normalizedPosition === "developer" || normalizedPosition === "verifier") {
+  var userContext = getCurrentUserContext_();
+  var normalizedPosition = String(userContext.position || "").trim().toLowerCase();
+
+  if (normalizedPosition === "developer") {
+    // Developer gets a dynamic config with ALL database columns
+    // The active module determines which view config to actually use
+    var moduleParam = "";
+    try {
+      // Read module from script properties set during doGet
+      moduleParam = PropertiesService.getScriptProperties()
+        .getProperty("CURRENT_MODULE_" + normalizeEmail_(userContext.email)) || "";
+    } catch(e) {}
+    
+    if (moduleParam === "typing") return getTypingRecordViewConfig_();
+    if (moduleParam === "dashboard") return getDeveloperRecordViewConfig_();
+    // issuance or default — give developer full column access
     return getDeveloperRecordViewConfig_();
   }
+
+  if (normalizedPosition === "verifier") {
+    return getIssuanceRecordViewConfig_();
+  }
+
   if (normalizedPosition === "releasing/verifier") {
     return getTypingRecordViewConfig_();
   }
+
   return getPositionRecordViewConfig_();
 }
 
@@ -1566,10 +1658,19 @@ function doGet(e) {
   var position = userContext ? String(userContext.position || "").trim().toLowerCase() : "";
   var isDeveloper = position === "developer";
 
-  // Developer can override module via URL param: ?module=typing
   var moduleParam = isDeveloper && e && e.parameter && e.parameter.module
     ? String(e.parameter.module || "").trim().toLowerCase()
     : "";
+
+  // Store the current module for this developer so getCurrentRecordViewConfig_ can read it
+  if (isDeveloper) {
+    try {
+      PropertiesService.getScriptProperties().setProperty(
+        "CURRENT_MODULE_" + normalizeEmail_(email),
+        moduleParam || "issuance"
+      );
+    } catch(ex) {}
+  }
 
   var templateName = "IssuanceIndex";
   var title = "Document Issuance Subsystem";
@@ -1582,7 +1683,6 @@ function doGet(e) {
     title = "Typing Records";
   }
 
-  // Developer module override
   if (isDeveloper) {
     if (moduleParam === "typing") {
       templateName = "TypingIndex";
@@ -1590,7 +1690,7 @@ function doGet(e) {
     } else if (moduleParam === "dashboard") {
       templateName = "DashboardIndex";
       title = "Executive Dashboard [DEV]";
-    } else if (moduleParam === "issuance") {
+    } else {
       templateName = "IssuanceIndex";
       title = "Document Issuance Subsystem [DEV]";
     }
@@ -1610,16 +1710,17 @@ function getUserModuleContext() {
   try {
     var email = getEditorEmail_();
     var userContext = resolveUserContext_(email);
-
-    // Use ONLY position — do not inherit isDeveloper from resolveUserContext_
-    // because that function grants isDeveloper=true to the fallback email
-    // regardless of their actual position in the Users sheet.
     var position = userContext ? String(userContext.position || "").trim().toLowerCase() : "";
     var isDeveloper = position === "developer";
 
-    Logger.log("[getUserModuleContext] email=" + email +
-      " position=" + position +
-      " isDeveloper=" + isDeveloper);
+    // Read the stored module for this developer (set during doGet)
+    var currentModule = "issuance";
+    if (isDeveloper) {
+      try {
+        currentModule = PropertiesService.getScriptProperties()
+          .getProperty("CURRENT_MODULE_" + normalizeEmail_(email)) || "issuance";
+      } catch(e) {}
+    }
 
     var fieldKeys = {};
     for (var i = 0; i < typingCreateFieldKeys.length; i++) {
@@ -1645,30 +1746,22 @@ function getUserModuleContext() {
 
     var modules = [];
     if (isDeveloper) {
-        modules = [
-          { key: "issuance",  label: "Issuance"  },
-          { key: "typing",    label: "Typing"    },
-          { key: "dashboard", label: "Dashboard" }
-        ];
+      modules = [
+        { key: "issuance",  label: "Issuance"  },
+        { key: "typing",    label: "Typing"     },
+        { key: "dashboard", label: "Dashboard"  }
+      ];
     }
 
-    var result = {
-      email:       email,
-      position:    position,
-      isDeveloper: isDeveloper,
-      modules:     modules,
-      fieldKeys:   isDeveloper ? fieldKeys : {},
-      dbHeaders:   isDeveloper ? dbHeaders : []
+    return {
+      email:         email,
+      position:      position,
+      isDeveloper:   isDeveloper,
+      currentModule: currentModule,
+      modules:       modules,
+      fieldKeys:     isDeveloper ? fieldKeys : {},
+      dbHeaders:     isDeveloper ? dbHeaders : []
     };
-
-    Logger.log("[getUserModuleContext] returning: " + JSON.stringify({
-      email: result.email,
-      position: result.position,
-      isDeveloper: result.isDeveloper,
-      modulesCount: result.modules.length
-    }));
-
-    return result;
 
   } catch (e) {
     Logger.log("[getUserModuleContext] FATAL: " + e.toString());
@@ -4948,7 +5041,12 @@ function typing_updateTempRecordEntries_(dataList, batchId) {
           studentName:     String(student.studentName     || "").trim().toUpperCase(),
           hei:             String(student.hei             || "").trim(),
           dateOfGraduation:String(student.dateGraduation  || "").trim(),
-          program:         String(student.program         || "").trim()
+          program:         String(student.program         || "").trim(),
+
+          targetReleaseDate: String(student.targetReleaseDate || "").trim(),
+          heiAddress:        String(student.heiAddress        || "").trim(),
+          es2InCharge:       String(student.es2InCharge       || "").trim(),
+          transactionType:   String(student.transactionType   || "").trim()
         };
 
         if (!normalized.studentName || !normalized.dateReceived) {
@@ -5040,7 +5138,17 @@ function buildTypingInsertContext_() {
 
   var headers = getHeaders_(sheet);
   var batchColumnIndex = getTypingBatchColumnIndex_(headers);
+
+  // Base 5 typing fields
   var writableFieldKeys = typingCreateFieldKeys.slice();
+
+  // Extra fields mapped to their Database sheet column names
+  var extraFieldMap = {
+    targetReleaseDate: "Target Release Date",
+    heiAddress:        "HEI: Address",
+    es2InCharge:       "ES II In-charge of the Program",
+    transactionType:   "Transaction Type"
+  };
 
   // Apply FieldManagement overrides for current user
   var sessionEmail = getEditorEmail_();
@@ -5048,55 +5156,72 @@ function buildTypingInsertContext_() {
   overrides.forEach(function(override) {
     if (writableFieldKeys.indexOf(override.fieldKey) === -1) {
       writableFieldKeys.push(override.fieldKey);
-      Logger.log("[FieldManagement] Added field '" + override.fieldKey +
-        "' for email '" + sessionEmail + "'");
     }
   });
 
+  // Build column indexes for base fields + extra fields
   var columnIndexes = {};
+
   writableFieldKeys.forEach(function(fieldKey) {
-    var columnName = (typingCreateFieldConfig[fieldKey] && typingCreateFieldConfig[fieldKey].columnName)
-      || (function() {
-        for (var oi = 0; oi < overrides.length; oi++) {
-          if (overrides[oi].fieldKey === fieldKey) return overrides[oi].columnName;
-        }
-        return "";
-      }())
-      || "";
+    // Column name: check overrides first, then typingCreateFieldConfig
+    var columnName = "";
+    for (var oi = 0; oi < overrides.length; oi++) {
+      if (overrides[oi].fieldKey === fieldKey) {
+        columnName = overrides[oi].columnName;
+        break;
+      }
+    }
+    if (!columnName && typingCreateFieldConfig[fieldKey]) {
+      columnName = typingCreateFieldConfig[fieldKey].columnName;
+    }
+    if (!columnName) return;
 
-    if (!columnName) {
-      Logger.log("[FieldManagement] No columnName found for fieldKey: " + fieldKey);
+    var idx = headers.indexOf(columnName);
+    if (idx === -1) {
+      Logger.log("[buildTypingInsertContext_] Column not found: " + columnName);
       return;
     }
-
-    var headerIndex = headers.indexOf(columnName);
-    if (headerIndex === -1) {
-      Logger.log("[FieldManagement] Column not found in Database sheet: " + columnName);
-      return;
-    }
-
-    columnIndexes[fieldKey] = headerIndex;
-    Logger.log("[FieldManagement] Mapped '" + fieldKey + 
-      "' -> '" + columnName + "' index=" + headerIndex);
+    columnIndexes[fieldKey] = idx;
   });
+
+  // Extra fields
+  var extraKeys = Object.keys(extraFieldMap);
+  for (var ei = 0; ei < extraKeys.length; ei++) {
+    var eKey = extraKeys[ei];
+    var eCol = extraFieldMap[eKey];
+    var eIdx = headers.indexOf(eCol);
+    if (eIdx === -1) {
+      Logger.log("[buildTypingInsertContext_] Extra column not found: " + eCol);
+      continue;
+    }
+    columnIndexes[eKey] = eIdx;
+    if (writableFieldKeys.indexOf(eKey) === -1) {
+      writableFieldKeys.push(eKey);
+    }
+  }
 
   return {
-    sheet: sheet,
-    headers: headers,
+    sheet:            sheet,
+    headers:          headers,
     batchColumnIndex: batchColumnIndex,
     writableFieldKeys: writableFieldKeys,
-    columnIndexes: columnIndexes
+    columnIndexes:    columnIndexes
   };
 }
 
 function normalizeTypingStudent_(student) {
   var safeStudent = student || {};
   return {
-    dateReceived: normalizeTypingFieldValue_("dateReceived", safeStudent.dateReceived),
-    studentName: normalizeTypingFieldValue_("studentName", safeStudent.studentName),
-    hei: normalizeTypingFieldValue_("hei", safeStudent.hei),
-    dateOfGraduation: normalizeTypingFieldValue_("dateOfGraduation", safeStudent.dateOfGraduation),
-    program: normalizeTypingFieldValue_("program", safeStudent.program)
+    dateReceived:      normalizeTypingFieldValue_("dateReceived",     safeStudent.dateReceived),
+    studentName:       normalizeTypingFieldValue_("studentName",      safeStudent.studentName),
+    hei:               normalizeTypingFieldValue_("hei",              safeStudent.hei),
+    dateOfGraduation:  normalizeTypingFieldValue_("dateOfGraduation", safeStudent.dateOfGraduation),
+    program:           normalizeTypingFieldValue_("program",          safeStudent.program),
+    // Extended fields — pass through as-is after trimming
+    targetReleaseDate: normalizeTypingFieldValue_("dateReceived",     safeStudent.targetReleaseDate), // date type
+    heiAddress:        String(safeStudent.heiAddress    || "").trim(),
+    es2InCharge:       String(safeStudent.es2InCharge   || "").trim(),
+    transactionType:   String(safeStudent.transactionType || "").trim()
   };
 }
 
@@ -7649,4 +7774,417 @@ function debugDeveloperColumns() {
     var idx = headers.indexOf(col);
     Logger.log(col + " => " + (idx === -1 ? "NOT FOUND" : "col " + (idx + 1)));
   });
+}
+
+// ========== Caching Logic ==========
+
+function getUserCacheKey_(email, module) {
+  // Normalize to safe property key
+  var safeEmail = normalizeEmail_(email).replace(/[^a-z0-9]/g, "_");
+  return USER_CACHE_KEY_PREFIX + module + ":" + safeEmail;
+}
+
+function getUserCacheTimestampKey_(email, module) {
+  var safeEmail = normalizeEmail_(email).replace(/[^a-z0-9]/g, "_");
+  return USER_CACHE_TIMESTAMP_KEY + module + ":" + safeEmail;
+}
+
+function setUserDataCache_(email, module, headers, rows) {
+  try {
+    var props  = PropertiesService.getScriptProperties();
+    var key    = getUserCacheKey_(email, module);
+    var tsKey  = getUserCacheTimestampKey_(email, module);
+    var payload = JSON.stringify({ headers: headers, rows: rows });
+    if (payload.length > 450000) {
+      Logger.log("[USER CACHE] Payload too large for " + email + " (" + payload.length + " bytes), skipping.");
+      return false;
+    }
+    props.setProperty(key, payload);
+    props.setProperty(tsKey, String(Date.now()));
+    Logger.log("[USER CACHE] Stored " + rows.length + " rows for " + email + " module=" + module);
+    return true;
+  } catch (e) {
+    Logger.log("[USER CACHE] Write error: " + e.toString());
+    return false;
+  }
+}
+
+function getUserDataCache_(email, module) {
+  try {
+    var props     = PropertiesService.getScriptProperties();
+    var key       = getUserCacheKey_(email, module);
+    var tsKey     = getUserCacheTimestampKey_(email, module);
+    var payload   = props.getProperty(key);
+    var timestamp = props.getProperty(tsKey);
+    if (!payload || !timestamp) {
+      Logger.log("[USER CACHE] Miss for " + email + " module=" + module);
+      return null;
+    }
+    var age = Date.now() - Number(timestamp);
+    if (age > USER_CACHE_TTL_MS) {
+      Logger.log("[USER CACHE] Expired for " + email + " (age: " + Math.round(age / 1000) + "s)");
+      return null;
+    }
+    var parsed = JSON.parse(payload);
+    Logger.log("[USER CACHE] Hit for " + email + " module=" + module +
+      " rows=" + (parsed.rows || []).length + " age=" + Math.round(age / 1000) + "s");
+    return parsed;
+  } catch (e) {
+    Logger.log("[USER CACHE] Read error: " + e.toString());
+    return null;
+  }
+}
+
+function clearUserDataCache_(email, module) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    props.deleteProperty(getUserCacheKey_(email, module));
+    props.deleteProperty(getUserCacheTimestampKey_(email, module));
+    Logger.log("[USER CACHE] Cleared for " + email + " module=" + module);
+    return true;
+  } catch (e) {
+    Logger.log("[USER CACHE] Clear error: " + e.toString());
+    return false;
+  }
+}
+
+function clearAllUserDataCaches_() {
+  // Called when a row is saved — clears caches for issuance and typing
+  // for the current user. Other users' caches expire naturally via TTL.
+  var email = getEditorEmail_();
+  clearUserDataCache_(email, "issuance");
+  clearUserDataCache_(email, "typing");
+  Logger.log("[USER CACHE] Cleared all module caches for " + email);
+}
+
+// ── Read full sheet into memory (shared by both developer and position caches) ─
+function readDatabaseSheetFull_() {
+  var ss    = SpreadsheetApp.openById(spreadsheetID);
+  var sheet = ss.getSheetByName(databaseSheetName);
+  if (!sheet || sheet.getLastRow() < 2) {
+    return { headers: [], rows: [] };
+  }
+  var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+    .map(function(h) { return String(h || "").trim(); });
+  var rows = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  Logger.log("[DB READ] Sheet read: " + rows.length + " rows, " + headers.length + " cols.");
+  return { headers: headers, rows: rows };
+}
+
+// ── Developer cache (already defined above, kept for reference) ───────────────
+var DEV_DATA_CACHE_KEY      = "dev:database:data";
+var DEV_CACHE_TIMESTAMP_KEY = "dev:database:timestamp";
+var DEV_CACHE_TTL_MS        = 5 * 60 * 1000;
+
+function setDevDatabaseCache_(headers, rows) {
+  try {
+    var props   = PropertiesService.getScriptProperties();
+    var payload = JSON.stringify({ headers: headers, rows: rows });
+    if (payload.length > 450000) {
+      Logger.log("[DEV CACHE] Payload too large (" + payload.length + " bytes), skipping.");
+      return false;
+    }
+    props.setProperty(DEV_DATA_CACHE_KEY, payload);
+    props.setProperty(DEV_CACHE_TIMESTAMP_KEY, String(Date.now()));
+    Logger.log("[DEV CACHE] Stored " + rows.length + " rows.");
+    return true;
+  } catch (e) {
+    Logger.log("[DEV CACHE] Write error: " + e.toString());
+    return false;
+  }
+}
+
+function getDevDatabaseCache_() {
+  try {
+    var props     = PropertiesService.getScriptProperties();
+    var payload   = props.getProperty(DEV_DATA_CACHE_KEY);
+    var timestamp = props.getProperty(DEV_CACHE_TIMESTAMP_KEY);
+    if (!payload || !timestamp) { Logger.log("[DEV CACHE] Miss."); return null; }
+    var age = Date.now() - Number(timestamp);
+    if (age > DEV_CACHE_TTL_MS) { Logger.log("[DEV CACHE] Expired (" + Math.round(age/1000) + "s)."); return null; }
+    var parsed = JSON.parse(payload);
+    Logger.log("[DEV CACHE] Hit — " + (parsed.rows||[]).length + " rows, age " + Math.round(age/1000) + "s.");
+    return parsed;
+  } catch (e) { Logger.log("[DEV CACHE] Read error: " + e.toString()); return null; }
+}
+
+function clearDevDatabaseCache_() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    props.deleteProperty(DEV_DATA_CACHE_KEY);
+    props.deleteProperty(DEV_CACHE_TIMESTAMP_KEY);
+    Logger.log("[DEV CACHE] Cleared.");
+    return true;
+  } catch (e) { Logger.log("[DEV CACHE] Clear error: " + e.toString()); return false; }
+}
+
+function isCurrentUserDeveloper_() {
+  var email      = getEditorEmail_();
+  var userContext = resolveUserContext_(email);
+  return String(userContext.position || "").trim().toLowerCase() === "developer";
+}
+
+// ── Unified cache resolver ────────────────────────────────────────────────────
+// Returns cached data for any user, or reads sheet and populates cache.
+function getOrPopulateCache_(email, module) {
+  var isDev = isCurrentUserDeveloper_();
+
+  if (isDev) {
+    var devCached = getDevDatabaseCache_();
+    if (devCached && devCached.headers && devCached.rows && devCached.rows.length) {
+      return devCached;
+    }
+    var fresh = readDatabaseSheetFull_();
+    if (fresh.rows.length) setDevDatabaseCache_(fresh.headers, fresh.rows);
+    return fresh;
+  }
+
+  // Non-developer: per-user cache
+  var userCached = getUserDataCache_(email, module);
+  if (userCached && userCached.headers && userCached.rows && userCached.rows.length) {
+    return userCached;
+  }
+  var freshData = readDatabaseSheetFull_();
+  if (freshData.rows.length) setUserDataCache_(email, module, freshData.headers, freshData.rows);
+  return freshData;
+}
+
+// ── getYearsSummary — cache-aware for ALL users ───────────────────────────────
+function getYearsSummary(module) {
+  var email  = getEditorEmail_();
+  var cached = getOrPopulateCache_(email, module);
+
+  if (!cached || !cached.headers || !cached.rows || !cached.rows.length) {
+    return getYearsSummaryFromSheet_(module);
+  }
+
+  Logger.log("[CACHE] getYearsSummary using cache for " + email + " module=" + module);
+  return buildYearsSummaryFromRows_(cached.headers, cached.rows);
+}
+
+// ── getDataByYear — cache-aware for ALL users ─────────────────────────────────
+function getDataByYear(module, year, batchSize, startRow) {
+  var email  = getEditorEmail_();
+  var cached = getOrPopulateCache_(email, module);
+
+  if (!cached || !cached.headers || !cached.rows || !cached.rows.length) {
+    return getDataByYearFromSheet_(module, year, batchSize, startRow);
+  }
+
+  Logger.log("[CACHE] getDataByYear using cache for " + email +
+    " module=" + module + " year=" + year);
+  return buildDataByYearFromRows_(cached.headers, cached.rows, module, year, batchSize, startRow);
+}
+
+// ── Build years summary from in-memory rows ───────────────────────────────────
+function buildYearsSummaryFromRows_(headers, rows) {
+  var dateColIdx = getYearDateColumnIndex_(headers);
+  if (dateColIdx === -1) {
+    return { success: false, error: "Date Received column not found", summaries: [] };
+  }
+  var yearCounts = {};
+  for (var i = 0; i < rows.length; i++) {
+    var val  = rows[i][dateColIdx];
+    if (!val) continue;
+    var year = getYearFromDate_(val);
+    if (!isNaN(year) && year > 2000 && year < 2100) {
+      yearCounts[year] = (yearCounts[year] || 0) + 1;
+    }
+  }
+  var summaries = Object.keys(yearCounts).map(function(y) {
+    return { year: parseInt(y), count: yearCounts[y], loaded: false };
+  }).sort(function(a, b) { return b.year - a.year; });
+  return { success: true, summaries: summaries };
+}
+
+// ── Build data by year from in-memory rows ────────────────────────────────────
+function buildDataByYearFromRows_(headers, rows, module, year, batchSize, startRow) {
+  var viewConfig  = getCurrentRecordViewConfig_();
+  var targetYear  = parseInt(year);
+  var dateColIdx  = getYearDateColumnIndex_(headers);
+  var maxResults  = batchSize || 5000;
+  var colsToMap   = (viewConfig.dataColumns && viewConfig.dataColumns.length > 0)
+    ? viewConfig.dataColumns : headers;
+
+  if (dateColIdx === -1) {
+    return { success: false, error: "Date Received column not found", data: [], total: 0 };
+  }
+
+  var colIndexMap = {};
+  colsToMap.forEach(function(colName) {
+    colIndexMap[colName] = headers.indexOf(colName);
+  });
+
+  // Scan from bottom (most recent first), respecting startRow pagination
+  var scanFromIndex = rows.length - 1;
+  if (startRow && startRow > 1) {
+    scanFromIndex = Math.min(startRow - 2, rows.length - 1);
+  }
+
+  var result       = [];
+  var nextScanFrom = 0;
+  var stoppedEarly = false;
+
+  for (var i = scanFromIndex; i >= 0; i--) {
+    var rowYear = getYearFromDate_(rows[i][dateColIdx]);
+    if (isNaN(rowYear) || rowYear !== targetYear) continue;
+
+    if (result.length >= maxResults) {
+      nextScanFrom = i + 2; // convert to sheet row number
+      stoppedEarly = true;
+      break;
+    }
+
+    var rowData = {};
+    colsToMap.forEach(function(colName) {
+      var idx = colIndexMap[colName];
+      rowData[colName] = idx >= 0 ? formatDateForClient_(rows[i][idx]) : "";
+    });
+    rowData._row = i + 2;
+    result.push(rowData);
+  }
+
+  return {
+    success:      true,
+    data:         result,
+    year:         String(year),
+    total:        result.length,
+    hasMore:      stoppedEarly,
+    nextScanFrom: stoppedEarly ? nextScanFrom : 0,
+    viewConfig:   viewConfig
+  };
+}
+
+// ── Original sheet-based fallbacks (non-developer, non-cached) ────────────────
+function getYearsSummaryFromSheet_(module) {
+  var ss    = SpreadsheetApp.openById(getSpreadsheetID_(module));
+  var sheet = ss.getSheetByName(getSheetName_(module));
+  if (!sheet || sheet.getLastRow() <= 1) return { success: true, summaries: [] };
+  var headers     = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var dateColIdx  = getYearDateColumnIndex_(headers);
+  if (dateColIdx === -1) return { success: false, error: "Date Received column not found" };
+  var lastRow     = sheet.getLastRow();
+  var dateValues  = sheet.getRange(2, dateColIdx + 1, lastRow - 1, 1).getValues();
+  var yearCounts  = {};
+  for (var i = 0; i < dateValues.length; i++) {
+    var val = dateValues[i][0];
+    if (!val) continue;
+    var year = getYearFromDate_(val);
+    if (!isNaN(year) && year > 2000 && year < 2100) yearCounts[year] = (yearCounts[year] || 0) + 1;
+  }
+  var summaries = Object.keys(yearCounts).map(function(y) {
+    return { year: parseInt(y), count: yearCounts[y], loaded: false };
+  }).sort(function(a, b) { return b.year - a.year; });
+  return { success: true, summaries: summaries };
+}
+
+function getDataByYearFromSheet_(module, year, batchSize, startRow) {
+  var ss        = SpreadsheetApp.openById(getSpreadsheetID_(module));
+  var sheet     = ss.getSheetByName(getSheetName_(module));
+  if (!sheet) return { success: false, error: "Sheet not found" };
+  var lastRow   = sheet.getLastRow();
+  var lastCol   = sheet.getLastColumn();
+  if (lastRow <= 1) return { success: true, data: [], total: 0 };
+  var headers   = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var viewConfig = getCurrentRecordViewConfig_();
+  var targetYear = parseInt(year);
+  var dateColIdx = getYearDateColumnIndex_(headers);
+  if (dateColIdx === -1) return { success: false, error: "Date Received column not found", data: [], total: 0 };
+  var maxResults = batchSize || 5000;
+  var scanFrom   = (startRow && startRow > 1) ? startRow : lastRow;
+  var colsToMap  = (viewConfig.dataColumns && viewConfig.dataColumns.length > 0) ? viewConfig.dataColumns : headers;
+  var colIndexMap = {};
+  colsToMap.forEach(function(n) { colIndexMap[n] = headers.indexOf(n); });
+  var neededColNums = Object.keys(colIndexMap).map(function(n) { return colIndexMap[n]; })
+    .filter(function(i) { return i >= 0; }).map(function(i) { return i + 1; })
+    .sort(function(a, b) { return a - b; });
+  var minCol = neededColNums[0], maxCol = neededColNums[neededColNums.length - 1];
+  var rangeWidth = maxCol - minCol + 1;
+  var dateColOneBased = dateColIdx + 1;
+  var dateInRange = (dateColOneBased >= minCol && dateColOneBased <= maxCol);
+  var dateRangeOffset = dateInRange ? (dateColOneBased - minCol) : -1;
+  var yearRows = [], chunkSize = 2000, currentBottom = scanFrom;
+  var stoppedEarly = false, nextScanFrom = 0;
+  while (currentBottom >= 2) {
+    var chunkStart = Math.max(2, currentBottom - chunkSize + 1);
+    var chunkLength = currentBottom - chunkStart + 1;
+    var dateScan = sheet.getRange(chunkStart, dateColIdx + 1, chunkLength, 1).getValues();
+    var matchingOffsets = [];
+    for (var i = 0; i < dateScan.length; i++) {
+      var val = dateScan[i][0];
+      if (!val) continue;
+      if (getYearFromDate_(val) === targetYear) matchingOffsets.push(i);
+    }
+    if (matchingOffsets.length > 0) {
+      var sheetRowNumbers = matchingOffsets.map(function(o) { return chunkStart + o; }).sort(function(a,b){return b-a;});
+      var j = 0;
+      while (j < sheetRowNumbers.length) {
+        var runStart = sheetRowNumbers[j], runEnd = runStart;
+        while (j+1 < sheetRowNumbers.length && sheetRowNumbers[j+1] === sheetRowNumbers[j]-1) { j++; runEnd = sheetRowNumbers[j]; }
+        var rStart = Math.min(runStart,runEnd), rEnd = Math.max(runStart,runEnd), runLen = rEnd-rStart+1;
+        var runValues = sheet.getRange(rStart, minCol, runLen, rangeWidth).getValues();
+        for (var r = runValues.length-1; r >= 0; r--) {
+          var rowNumber = rStart + r;
+          if (yearRows.length >= maxResults) { nextScanFrom = rowNumber; stoppedEarly = true; break; }
+          if (dateInRange && getYearFromDate_(runValues[r][dateRangeOffset]) !== targetYear) continue;
+          var rowData = {};
+          colsToMap.forEach(function(n) {
+            var absIdx = colIndexMap[n];
+            if (absIdx < 0) { rowData[n] = ""; return; }
+            rowData[n] = formatDateForClient_(runValues[r][(absIdx+1)-minCol]);
+          });
+          rowData._row = rowNumber;
+          yearRows.push(rowData);
+        }
+        if (stoppedEarly) break;
+        j++;
+      }
+    }
+    if (stoppedEarly) break;
+    currentBottom = chunkStart - 1;
+  }
+  return {
+    success: true, data: yearRows, year: String(year), total: yearRows.length,
+    hasMore: stoppedEarly, nextScanFrom: stoppedEarly ? nextScanFrom : 0, viewConfig: viewConfig
+  };
+}
+
+// ── Cache invalidation on any write ──────────────────────────────────────────
+// Replace your existing markDatabaseRowUpdated_ with this version
+function markDatabaseRowUpdated_(rowNumber) {
+  if (!rowNumber || rowNumber < 2) return;
+  markSheetUpdated_(databaseSheetName, rowNumber);
+  // Invalidate caches so next load gets fresh data
+  clearDevDatabaseCache_();
+  clearAllUserDataCaches_();
+}
+
+// ── Background refresh endpoint ───────────────────────────────────────────────
+// Called by the client after initial load to refresh cache in background.
+// Returns { ok, rows, summaries } so the client can update the UI if new data arrived.
+function refreshUserCache(module) {
+  var email = getEditorEmail_();
+  Logger.log("[BG REFRESH] Starting for " + email + " module=" + module);
+
+  // Always read fresh from sheet
+  var fresh = readDatabaseSheetFull_();
+  if (!fresh.rows.length) return { ok: false, message: "Sheet empty." };
+
+  var isDev = isCurrentUserDeveloper_();
+  if (isDev) {
+    setDevDatabaseCache_(fresh.headers, fresh.rows);
+  } else {
+    setUserDataCache_(email, module, fresh.headers, fresh.rows);
+  }
+
+  var summaries = buildYearsSummaryFromRows_(fresh.headers, fresh.rows);
+  Logger.log("[BG REFRESH] Done for " + email + " — " + fresh.rows.length + " rows.");
+
+  return {
+    ok:        true,
+    rowCount:  fresh.rows.length,
+    summaries: summaries.summaries || []
+  };
 }

@@ -32,6 +32,22 @@ var TypingService = {
       .getYearsSummary("typing");
   },
 
+  refreshCacheInBackground: function(module) {
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (!result || !result.ok) return;
+        console.log("[BG REFRESH] Complete, rows=" + result.rowCount);
+        // If row count differs from what we loaded, trigger a soft reload
+        // of just the year summaries so new tabs appear
+        if (result.summaries && result.summaries.length) {
+          // You can hook this into your existing Controller.onYearSummaryLoaded
+          // or simply update the year tabs if counts changed
+        }
+      })
+      .withFailureHandler(function() {})
+      .refreshUserCache(module);
+  },
+
   getDataByYear: function(year, batchSize, nextScanFrom, onSuccess) {
     // Handle old 3-arg call signature (nextScanFrom omitted)
     if (typeof nextScanFrom === "function") {

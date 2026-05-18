@@ -171,8 +171,7 @@ var FieldManagement = {
               var currentUrl = window.location.href;
 
               switcher.innerHTML = modules.map(function(mod) {
-                var isActive = currentUrl.indexOf("module=" + mod.key) !== -1 ||
-                  (currentUrl.indexOf("module=") === -1 && mod.key === "issuance");
+                var isActive = mod.key === context.currentModule;
 
                 return '<a href="' + baseUrl + '?module=' + mod.key + '" ' +
                   'target="_top" ' +

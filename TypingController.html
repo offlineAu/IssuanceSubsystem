@@ -81,6 +81,8 @@ var TypingController = {
       } else {
         if (!settings.silent) View.showOverlay(false);
       }
+  
+      Service.refreshCacheInBackground("typing");
     });
   },
 
@@ -600,7 +602,7 @@ var TypingController = {
     var heiKey = String(entry.fields.hei || "").trim().toLowerCase();
     var heiLookup = (staticOptions.heiLookup || {})[heiKey] || {};
     entry.fields.targetReleaseDate = entry.fields.dateReceived
-      ? this.addDaysToIso(entry.fields.dateReceived, staticOptions.releaseOffsetDays || 7)
+      ? this.addDaysToIso(entry.fields.dateReceived, staticOptions.releaseOffsetDays || 30)
       : "";
     entry.fields.transactionType = heiLookup.transactionType || staticOptions.defaultTransactionType || "Airl";
     entry.fields.heiAddress = heiLookup.heiAddress || "";
@@ -1113,9 +1115,6 @@ var TypingController = {
         var address = (Model.refData.heiMap || {})[hei] || "";
         View.setValue("temp_hei_address", address);
 
-        // Default transaction type to Walk-in if not already set
-        var txType = document.getElementById("temp_transaction_type");
-        if (txType && !txType.value) txType.value = "Walk-in";
       });
       heiInput.addEventListener("input", function() {
         var hei = heiInput.value.trim();
@@ -1150,7 +1149,7 @@ var TypingController = {
         var val = dateReceivedInput.value;
         if (val) {
           var target = document.getElementById("temp_target_release_date");
-          if (target) target.value = TypingController.addDaysToIso(val, 7);
+          if (target) target.value = TypingController.addDaysToIso(val, 30);
         }
       });
     }
